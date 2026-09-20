@@ -1083,13 +1083,26 @@ async function cargarCoord() {
       <td>${esc((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}</td><td>${esc(v.observaciones)}</td>${celdaC(v)}</tr>`;
   });
   $("total-coord").textContent = "Total: " + fmtES(tot);
-  renderResumen(data || [], certMap);
+  renderResumen(data || [], certMap, turno);
   tb.querySelectorAll("[data-vercert]").forEach(b => b.onclick = () => verCertCoord(certMap[b.dataset.vercert]));
 }
-/* Resumen por profesor del periodo visible: compara actividad de un vistazo */
-function renderResumen(viajes, certMap) {
+/* Resumen por profesor del periodo visible: compara actividad de un vistazo.
+   Usa los filtros de fecha y profesora de la parte superior. */
+const MESES_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const PALETA = ["#1a73e8", "#15803d", "#b45309", "#7c3aed", "#0891b2", "#dc2626", "#ca8a04", "#4d7c0f", "#0f766e", "#a21caf"];
+function pintarChart(id, cfg) {
+  if (!window.Chart) return;
+  const el = document.getElementById(id);
+  if (!el) return;
+  const previo = window.Chart.getChart(el);
+  if (previo) previo.destroy();
+  new window.Chart(el, cfg);
+}
+const baseChart = titulo => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, title: { display: true, text: titulo } } });
+async function renderResumen(viajes, certMap, turno) {
   const box = $("resumen-coord");
   if (!box) return;
+  const { desde, hasta } = rangoCoord(), f = $("filtro-prof").value.trim();
   const por = {};
   (viajes || []).forEach(v => {
     const n = (v.profiles && v.profiles.nombre) || "?";
@@ -1103,17 +1116,52 @@ function renderResumen(viajes, certMap) {
   const totV = filas.reduce((a, [, r]) => a + r.viajes, 0);
   const totK = filas.reduce((a, [, r]) => a + r.km, 0);
   const totE = filas.reduce((a, [, r]) => a + r.total, 0);
-  box.innerHTML = `<div class="kpis">
+  const nombres = filas.map(([n]) => n);
+  const colores = nombres.map((_, i) => PALETA[i % PALETA.length]);
+  box.innerHTML = `<p class="muted">Periodo ${fmtFecha(desde)} – ${fmtFecha(hasta)}${f ? ` · profesora: «${esc(f)}»` : ""} (filtros de arriba)</p>
+    <div class="kpis">
       <div class="kpi"><b>${filas.length}</b><span>profesores</span></div>
       <div class="kpi"><b>${totV}</b><span>viajes</span></div>
       <div class="kpi"><b>${Math.round(totK)} km</b><span>ida-vuelta</span></div>
       <div class="kpi"><b>${fmtES(totE)}</b><span>total</span></div>
+    </div>
+    <div class="charts">
+      <div class="chartbox"><canvas id="ch-km"></canvas></div>
+      <div class="chartbox"><canvas id="ch-euros"></canvas></div>
+      <div class="chartbox"><canvas id="ch-cursos"></canvas></div>
+      <div class="chartbox"><canvas id="ch-meses"></canvas></div>
     </div>
     <table class="dash"><thead><tr><th>Profesor</th><th>Viajes</th><th>Km</th><th>Total</th><th>Sin 📜</th><th></th></tr></thead><tbody>` +
     filas.map(([n, r]) => `<tr><td>${esc(n)}</td><td>${r.viajes}</td><td>${Math.round(r.km)}</td>` +
       `<td>${fmtES(r.total)}</td><td>${r.sinCert ? `<b class="alerta">${r.sinCert}</b>` : "0"}</td>` +
       `<td class="barcell"><div class="bar" style="width:${maxKm ? Math.round(r.km / maxKm * 100) : 0}%"></div></td></tr>`).join("") +
     `</tbody></table>`;
+  pintarChart("ch-km", { type: "bar", data: { labels: nombres, datasets: [{ data: filas.map(([, r]) => Math.round(r.km)), backgroundColor: colores }] }, options: baseChart("Km por profesora") });
+  pintarChart("ch-euros", { type: "doughnut", data: { labels: nombres, datasets: [{ data: filas.map(([, r]) => +r.total.toFixed(2)), backgroundColor: colores }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "right" }, title: { display: true, text: "Reparto de €" } } } });
+  // Viajes por curso (top 8 del periodo)
+  const porCurso = {};
+  (viajes || []).forEach(v => {
+    const k = (v.motivo_codigo ? v.motivo_codigo + " - " : "") + (v.motivo_curso || "Sin curso");
+    porCurso[k] = porCurso[k] || { viajes: 0, km: 0 };
+    porCurso[k].viajes++; porCurso[k].km += +v.km || 0;
+  });
+  const topC = Object.entries(porCurso).sort((a, b) => b[1].km - a[1].km).slice(0, 8);
+  pintarChart("ch-cursos", { type: "bar", data: { labels: topC.map(([k]) => k), datasets: [{ data: topC.map(([, r]) => r.viajes), backgroundColor: "#15803d" }] }, options: { ...baseChart("Viajes por curso (top 8)"), indexAxis: "y" } });
+  // Evolución de km en los últimos 6 meses (respeta el filtro de profesora)
+  const h = new Date(); const d6 = new Date(h.getFullYear(), h.getMonth() - 5, 1).toISOString().slice(0, 10);
+  const claves6 = [];
+  for (let i = 5; i >= 0; i--) { const d = new Date(h.getFullYear(), h.getMonth() - i, 1); claves6.push(d.toISOString().slice(0, 7)); }
+  let todos;
+  if (DEMO) todos = demoSeed().filter(v => v.fecha >= d6 && (!f || (perfil.nombre || "").toLowerCase().includes(f.toLowerCase())));
+  else {
+    let q = sb.from("viajes").select("fecha,km,profiles!inner(nombre)").gte("fecha", d6);
+    if (f) q = q.ilike("profiles.nombre", `%${f}%`);
+    todos = (await q).data || [];
+  }
+  if (turno !== turnoCoord) return;
+  const kmMes = Object.fromEntries(claves6.map(k => [k, 0]));
+  (todos || []).forEach(v => { const k = String(v.fecha).slice(0, 7); if (k in kmMes) kmMes[k] += +v.km || 0; });
+  pintarChart("ch-meses", { type: "line", data: { labels: claves6.map(k => MESES_ES[+k.slice(5, 7) - 1] + " " + k.slice(2, 4)), datasets: [{ data: claves6.map(k => Math.round(kmMes[k])), borderColor: "#1a73e8", backgroundColor: "#1a73e833", fill: true, tension: 0.3 }] }, options: baseChart("Km por mes (6 meses)") });
 }
 // Coordinador: abrir el certificado de un viaje en pestaña nueva
 async function verCertCoord(c) {
