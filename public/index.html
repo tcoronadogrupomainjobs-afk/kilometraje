@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kilometraje · Profesores</title>
+<link rel="stylesheet" href="style.css?v=20260919j">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+</head>
+<body>
+<header><h1>🚗 Hoja de kilometraje</h1><div id="sesion"></div></header>
+<div id="demo-banner" class="banner" hidden>🧪 <b>Modo demo local</b> — sin usuarios, datos en este navegador.
+<button id="btn-salir-demo">Salir de demo</button></div>
+<main>
+  <!-- Login -->
+  <section id="v-login" class="card">
+    <h2>🔑 Acceso</h2>
+    <input id="email" type="email" placeholder="email" autocomplete="username">
+    <input id="pass" type="password" placeholder="contraseña" autocomplete="current-password">
+    <button id="btn-login">Entrar</button>
+    <button id="btn-demo" class="primary">▶ Probar demo sin cuenta</button>
+    <p class="muted">La demo funciona <b>sin crear usuarios</b>: guarda en este navegador,
+    calcula km reales con el mapa y genera el PDF.<br>
+    Cuando lo tengas claro, crea los usuarios en Supabase y la app pedirá acceso.</p>
+    <p class="muted">Te crea la cuenta el coordinador en Supabase &gt; Authentication &gt; Add user.<br>
+    El rol (profesor/coordinador) se cambia en la tabla <code>profiles</code>.</p>
+    <p id="login-err" class="error"></p>
+  </section>
+
+  <!-- Profesor -->
+  <section id="v-prof" class="card" hidden>
+    <h2>🧭 Mis desplazamientos <span id="prof-nombre" class="muted"></span></h2>
+    <h3 class="sec sec-viaje">👤 Mis datos</h3>
+    <p class="muted">Rellenan las celdas Trabajador y N.I.F. de la hoja del PDF.</p>
+    <div class="row">
+      <label>Nombre completo <input id="f-nombre" size="32" placeholder="Nombre y apellidos"></label>
+      <label>DNI <input id="f-nif" size="12" placeholder="12345678X"></label>
+      <label>Dirección habitual <input id="f-domicilio" size="40" placeholder="Calle Mayor 1, Noviercas"></label>
+      <button id="btn-datos" class="primary">Guardar datos</button>
+    </div>
+    <div class="row">
+      <label>Desde <input type="date" id="desde-prof"></label>
+      <label>Hasta <input type="date" id="hasta-prof"></label>
+      <button id="btn-agrup-prof" title="Ordenar como en el PDF: por fecha juntando cada curso">Agrupar por curso</button>
+      <button id="btn-pdf" class="primary">📄 Generar PDF</button>
+      <button id="btn-correo" title="Genera el PDF y un correo de Outlook listo para enviar">✉️ Crear correo</button>
+    </div>
+    <table id="t-prof"><thead><tr>
+      <th id="th-fecha-prof" class="sortable" title="Ordenar por fecha">Fecha</th><th>Origen → Destino (ida-vuelta)</th><th>Km</th>
+      <th>€/km</th><th>Total</th><th id="th-motivo-prof" class="sortable" title="Ordenar por motivo">Motivo</th><th>Observaciones</th><th>📜</th><th></th>
+    </tr></thead><tbody></tbody></table>
+    <div class="row"><span id="total-prof" class="total"></span></div>
+    <h3 class="sec sec-viaje">🚗 Nuevo viaje</h3>
+    <div class="grid linea-curso">
+      <label>Fecha <input type="date" id="f-fecha"></label>
+      <label>Código curso <input id="f-cod" placeholder="68383" maxlength="8" inputmode="numeric"></label>
+      <label class="crece">Motivo / curso <input id="f-curso" placeholder="OLIMPIADAS"></label>
+    </div>
+    <div class="grid">
+      <label class="span2">🏠 Origen (calle y nº, pueblo) <input id="f-origen" placeholder="Calle Mayor 1, Noviercas"></label>
+      <label class="span2">📍 Punto intermedio (opcional) <input id="f-via" placeholder="Ej. Ágreda — para afinar la ruta"></label>
+      <label class="span2">🏁 Destino (calle y nº, pueblo) <input id="f-destino" placeholder="Calle Real 5, Los Rábanos"></label>
+      <label class="span2">Observaciones (solo tabla, no sale en PDF) <input id="f-obs" placeholder="ej. peaje, desvío por obras"></label>
+      <label><span class="lab-row">Km manual (opcional) <span class="nota">Solo si lo autoriza la coordinadora</span></span><input id="f-km" type="number" min="1"></label>
+      <span class="muted ayuda">Si lo dejas vacío, los km se calculan con el mapa (origen → vía → destino).</span>
+    </div>
+    <div class="row">
+      <button id="btn-calc">🔍 Calcular km (autovía primero, si no más corta)</button>
+      <button id="btn-elegir" title="Muestra las rutas posibles para que elijas una">🛣️ Elegir ruta</button>
+      <span id="calc-info" class="muted"></span>
+    </div>
+    <div id="rutas-opciones"></div>
+    <button id="btn-save" class="primary">Guardar viaje</button>
+    <button id="btn-cancel-edit" hidden>Cancelar edición</button>
+    <h3 class="sec sec-cert">📜 Certificados de asistencia</h3>
+    <p class="muted">Una línea por cada viaje del periodo: arrastra la imagen o PDF del certificado sobre su viaje, o pulsa para elegirlo.</p>
+    <div id="cert-lineas"></div>
+    <h3 class="sec sec-tick">⛽ Tickets de gasolina del periodo</h3>
+    <div class="row">
+      <input type="file" id="f-tickets" accept="image/*" multiple>
+      <span class="muted">Se anexan al PDF final los visibles en el periodo elegido: una página por ticket.</span>
+    </div>
+    <div id="tickets-prev" class="thumbs"></div>
+  </section>
+
+  <!-- Coordinador -->
+  <section id="v-coord" class="card" hidden>
+    <h2>📊 Todos los desplazamientos <span class="live">en directo</span></h2>
+    <div class="row">
+      <label>Desde <input type="date" id="desde-coord"></label>
+      <label>Hasta <input type="date" id="hasta-coord"></label>
+      <label>Profesor <input id="filtro-prof" placeholder="filtrar por nombre"></label>
+      <button id="btn-ver">Ver</button>
+      <button id="btn-agrup-coord" title="Ordenar como en el PDF: por fecha juntando cada curso">Agrupar por curso</button>
+    </div>
+    <div class="row">
+      <label>Precio €/km <input id="precio" size="4" value="0.26"></label>
+      <button id="btn-precio">Guardar precio</button>
+      <label>PDF de: <select id="pdf-user"></select></label>
+      <button id="btn-pdf-coord" class="primary">📄 PDF del profesor</button>
+      <button id="btn-archivar-coord" title="Descarga el PDF final del profesor como copia y borra de la nube sus certificados y tickets del periodo (los viajes se conservan)">🗄️ Archivar periodo</button>
+    </div>
+    <table id="t-coord"><thead><tr>
+      <th id="th-fecha-coord" class="sortable" title="Ordenar por fecha">Fecha</th><th>Profesor</th><th>Desplazamiento</th><th>Km</th><th>Total</th><th id="th-motivo-coord" class="sortable" title="Ordenar por motivo">Motivo</th><th>Observaciones</th><th>📜</th>
+    </tr></thead><tbody></tbody></table>
+    <div class="row"><span id="total-coord" class="total"></span></div>
+  </section>
+</main>
+<!-- Al cambiar app.js, sube el ?v= para que el navegador no use la version en cache -->
+<script src="config.js?v=20260919"></script>
+<script src="logo.js?v=20260918"></script>
+<script src="app.js?v=20260919x"></script>
+</body>
+</html>

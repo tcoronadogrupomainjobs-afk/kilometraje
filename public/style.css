@@ -1,0 +1,100 @@
+/* Hoja de kilometraje — tema visual */
+:root{
+  --pri:#1a73e8; --pri-d:#0f2a4a; --pri-l:#e8f0fe;
+  --ok:#15803d; --ok-bg:#e7f6ec;
+  --warn:#b45309; --warn-bg:#fef3c7;
+  --bad:#c62828; --bad-bg:#fdecec;
+  --bg:#eef2f7; --card:#fff; --line:#d7e0ee;
+  --ink:#1f2937; --mut:#64748b;
+}
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,"Segoe UI",Arial,sans-serif;margin:0;background:var(--bg);color:var(--ink)}
+header{background:linear-gradient(90deg,var(--pri-d),var(--pri));color:#fff;padding:14px 22px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 2px 8px #0003;position:sticky;top:0;z-index:10}
+header h1{font-size:23px;margin:0}
+header button{background:#ffffff26;color:#fff;border:1px solid #ffffff55}
+main{max-width:1400px;margin:22px auto;padding:0 18px 40px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:20px;box-shadow:0 2px 10px #0f2a4a14}
+.card h2{font-size:23px;margin:0 0 12px;padding-bottom:10px;border-bottom:3px solid var(--pri);display:flex;align-items:center;gap:8px}
+#v-coord h2{border-color:var(--ok)}
+h3.sec{font-size:19px;margin:20px 0 10px;padding:9px 12px;border-radius:8px;border-left:6px solid var(--pri);background:var(--pri-l);display:flex;align-items:center;gap:8px}
+h3.sec-cert{border-color:var(--warn);background:var(--warn-bg)}
+h3.sec-tick{border-color:var(--ok);background:var(--ok-bg)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:10px 0}
+.grid .span2{grid-column:1/-1}
+.grid .ayuda{align-self:end;padding-bottom:10px}
+/* Fila fecha + código + motivo: cada uno lo que necesita (fecha lo suyo,
+   código 6 dígitos, motivo todo el resto) */
+.grid.linea-curso{grid-template-columns:auto auto 1fr;align-items:end}
+.grid.linea-curso input#f-cod{width:11ch}
+.grid.linea-curso .crece input{width:100%}
+label{font-weight:600;font-size:14px;display:flex;flex-direction:column;gap:4px}
+.row label{flex-direction:row;align-items:center}
+.grid label input{font-weight:400}
+input,select{padding:9px 10px;font-size:14px;border-radius:8px;border:1px solid #b9c6da;background:#fff}
+input:focus,select:focus{outline:2px solid var(--pri);border-color:var(--pri)}
+input[type="file"]{border-style:dashed;background:#f8fbff}
+button{cursor:pointer;padding:9px 14px;font-size:14px;border-radius:8px;border:1px solid #b9c6da;background:#f1f5fb;color:var(--ink);font-weight:600}
+button:hover{filter:brightness(.96)}
+button:disabled{opacity:.55;cursor:wait}
+button.primary{background:linear-gradient(180deg,#2b83f0,var(--pri));color:#fff;border:none}
+button.on{background:var(--pri-d);color:#fff;border-color:var(--pri-d)}
+#btn-pdf,#btn-pdf-coord{margin-left:auto}
+#btn-login{background:var(--pri-d);color:#fff;border:none}
+.ibtn{padding:4px 9px;font-size:16px;border-radius:7px;line-height:1.2}
+.ibtn.danger{background:var(--bad-bg);border-color:#efb4b4;color:var(--bad)}
+.ibtn.sm{font-size:12px}
+a.ver{font-size:13px;font-weight:700;color:var(--pri);text-decoration:none;margin:0 4px}
+table{width:100%;border-collapse:separate;border-spacing:0;font-size:15px;margin-top:8px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th,td{padding:8px 10px;text-align:left}
+thead th{background:var(--pri-d);color:#fff;font-size:12px;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{background:#1e3a5f}
+/* Las tablas aprovechan el ancho: solo Motivo/Observaciones/Origen parten linea;
+   fecha, km, importes y botones van en una sola linea */
+#t-prof th,#t-prof td,#t-coord th,#t-coord td{white-space:nowrap;vertical-align:top}
+#t-prof th:nth-child(2),#t-prof td:nth-child(2),
+#t-prof th:nth-child(6),#t-prof td:nth-child(6),
+#t-prof th:nth-child(7),#t-prof td:nth-child(7),
+#t-coord th:nth-child(3),#t-coord td:nth-child(3),
+#t-coord th:nth-child(6),#t-coord td:nth-child(6),
+#t-coord th:nth-child(7),#t-coord td:nth-child(7){white-space:normal}
+#t-prof td:nth-child(6),#t-coord td:nth-child(6){min-width:220px}
+#t-prof td:last-child,#t-coord td:last-child{white-space:nowrap}
+tbody td{border-top:1px solid var(--line)}
+tbody tr:nth-child(even){background:#f5f8fd}
+tbody tr:hover{background:#e7f0fd}
+td.km-manual{color:var(--bad);font-weight:800}
+td.st{text-align:center;font-size:18px;white-space:nowrap}
+tbody td a{font-size:17px}
+.total{font-weight:800;font-size:17px;margin-left:auto;background:var(--ok-bg);color:var(--ok);border:1px solid #bfe6c9;padding:6px 14px;border-radius:999px;white-space:nowrap}
+.muted{color:var(--mut);font-size:13px}
+.error{color:var(--bad);font-weight:700}
+.nota{color:#fff;background:var(--bad);font-size:13px;font-weight:700;padding:2px 10px;border-radius:999px;width:fit-content;white-space:nowrap}
+.lab-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.live{color:var(--ok);font-size:13px;font-weight:700}
+.live::before{content:"";display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--ok);margin-right:5px;animation:blink 1.6s infinite}
+@keyframes blink{50%{opacity:.35}}
+.banner{background:var(--warn-bg);border-bottom:2px solid #e0c36a;padding:9px 20px;font-size:14px;display:flex;gap:10px;align-items:center}
+.banner[hidden]{display:none}
+.thumbs{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0}
+.thumb{border:1px solid var(--line);border-radius:10px;padding:8px;text-align:center;font-size:12px;max-width:160px;background:#fbfdff;box-shadow:0 1px 4px #0f2a4a12}
+.thumb img{max-width:136px;max-height:136px;display:block;margin:0 auto 6px;border-radius:6px}
+.thumb button{margin-top:6px}
+.cert-linea{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-left:6px solid var(--warn);border-radius:10px;padding:8px 12px;margin:8px 0;font-size:14px;background:#fffdf7}
+.cert-linea .viaje{flex:1;font-weight:600}
+.dropzone{border:2px dashed #b9c6da;border-radius:8px;padding:9px 14px;cursor:pointer;font-size:13px;color:var(--mut);min-width:230px;text-align:center;background:#fff;transition:all .15s}
+.dropzone:hover{border-color:var(--pri)}
+.dropzone.over{border-color:var(--pri);background:var(--pri-l);transform:scale(1.02)}
+.dropzone.ok{border-style:solid;border-color:var(--ok);color:var(--ok);background:var(--ok-bg);font-weight:700}
+.cert-linea button{font-size:12px}
+#calc-info{display:block;background:#f4f8ff;border:1px solid #c9dcfa;border-radius:8px;padding:8px 12px;margin-top:8px;font-size:13px}
+#calc-info:empty{display:none}
+#calc-info a{font-weight:800;color:var(--pri)}
+#rutas-opciones{display:flex;flex-direction:column;gap:6px;margin:4px 0 10px}
+#rutas-opciones:empty{display:none}
+.ruta-op{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:14px;font-weight:400;cursor:pointer;background:#fbfdff}
+.ruta-op:hover{border-color:var(--pri)}
+.ruta-op input{accent-color:var(--pri);width:17px;height:17px}
+.ruta-op a{font-size:17px;text-decoration:none}
+@media(max-width:700px){.grid,.grid.linea-curso{grid-template-columns:1fr}header h1{font-size:16px}.cert-linea{flex-wrap:wrap}}
