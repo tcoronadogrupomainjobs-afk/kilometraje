@@ -1083,7 +1083,37 @@ async function cargarCoord() {
       <td>${esc((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}</td><td>${esc(v.observaciones)}</td>${celdaC(v)}</tr>`;
   });
   $("total-coord").textContent = "Total: " + fmtES(tot);
+  renderResumen(data || [], certMap);
   tb.querySelectorAll("[data-vercert]").forEach(b => b.onclick = () => verCertCoord(certMap[b.dataset.vercert]));
+}
+/* Resumen por profesor del periodo visible: compara actividad de un vistazo */
+function renderResumen(viajes, certMap) {
+  const box = $("resumen-coord");
+  if (!box) return;
+  const por = {};
+  (viajes || []).forEach(v => {
+    const n = (v.profiles && v.profiles.nombre) || "?";
+    por[n] = por[n] || { viajes: 0, km: 0, total: 0, sinCert: 0 };
+    por[n].viajes++; por[n].km += +v.km || 0; por[n].total += +v.total || 0;
+    if (!certMap[String(v.id)]) por[n].sinCert++;
+  });
+  const filas = Object.entries(por).sort((a, b) => b[1].total - a[1].total);
+  if (!filas.length) { box.innerHTML = '<span class="muted">Sin datos en este periodo.</span>'; return; }
+  const maxKm = Math.max(...filas.map(([, r]) => r.km));
+  const totV = filas.reduce((a, [, r]) => a + r.viajes, 0);
+  const totK = filas.reduce((a, [, r]) => a + r.km, 0);
+  const totE = filas.reduce((a, [, r]) => a + r.total, 0);
+  box.innerHTML = `<div class="kpis">
+      <div class="kpi"><b>${filas.length}</b><span>profesores</span></div>
+      <div class="kpi"><b>${totV}</b><span>viajes</span></div>
+      <div class="kpi"><b>${Math.round(totK)} km</b><span>ida-vuelta</span></div>
+      <div class="kpi"><b>${fmtES(totE)}</b><span>total</span></div>
+    </div>
+    <table class="dash"><thead><tr><th>Profesor</th><th>Viajes</th><th>Km</th><th>Total</th><th>Sin 📜</th><th></th></tr></thead><tbody>` +
+    filas.map(([n, r]) => `<tr><td>${esc(n)}</td><td>${r.viajes}</td><td>${Math.round(r.km)}</td>` +
+      `<td>${fmtES(r.total)}</td><td>${r.sinCert ? `<b class="alerta">${r.sinCert}</b>` : "0"}</td>` +
+      `<td class="barcell"><div class="bar" style="width:${maxKm ? Math.round(r.km / maxKm * 100) : 0}%"></div></td></tr>`).join("") +
+    `</tbody></table>`;
 }
 // Coordinador: abrir el certificado de un viaje en pestaña nueva
 async function verCertCoord(c) {

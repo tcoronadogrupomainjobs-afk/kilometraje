@@ -97,4 +97,13 @@ tbody td a{font-size:17px}
 .ruta-op:hover{border-color:var(--pri)}
 .ruta-op input{accent-color:var(--pri);width:17px;height:17px}
 .ruta-op a{font-size:17px;text-decoration:none}
+/* Resumen del coordinador: tarjetas + tabla comparativa con barras */
+.kpis{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
+.kpi{background:#f4f8ff;border:1px solid #c9dcfa;border-radius:10px;padding:8px 16px;text-align:center;min-width:110px}
+.kpi b{display:block;font-size:19px}
+.kpi span{font-size:12px;color:var(--mut)}
+table.dash{font-size:14px}
+table.dash .barcell{width:34%}
+.bar{height:12px;border-radius:6px;background:linear-gradient(90deg,var(--pri),var(--pri-d))}
+.alerta{color:var(--bad)}
 @media(max-width:700px){.grid,.grid.linea-curso{grid-template-columns:1fr}header h1{font-size:16px}.cert-linea{flex-wrap:wrap}}
