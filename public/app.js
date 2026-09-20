@@ -230,7 +230,6 @@ $("btn-login").onclick = async () => {
   if (error) { $("login-err").textContent = error.message; return; }
   await arrancarUnaVez();
 };
-$("btn-demo").onclick = () => { localStorage.setItem("km_demo", "1"); entrarDemo(); };
 $("btn-salir-demo").onclick = () => { localStorage.removeItem("km_demo"); DEMO = !TIENE_SUPABASE ? true : false; location.reload(); };
 function entrarDemo() {
   DEMO = true;
