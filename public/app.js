@@ -248,7 +248,7 @@ function entrarDemo() {
   cargarDatos();
   $("desde-coord").value = primerDia(); $("hasta-coord").value = ultimoDia(); $("precio").value = String(precioKm).replace(".", ",");
   $("pdf-user").innerHTML = `<option value="demo">${perfil.nombre}</option>`;
-  $("btn-ver").onclick = cargarCoord; $("filtro-prof").oninput = cargarCoord; $("desde-coord").onchange = cargarCoord; $("hasta-coord").onchange = cargarCoord;
+  $("btn-ver").onclick = cargarCoord; $("filtro-prof").onchange = cargarCoord; $("desde-coord").onchange = cargarCoord; $("hasta-coord").onchange = cargarCoord;
   $("btn-precio").onclick = () => { precioKm = parseFloat($("precio").value.replace(",", ".")) || 0.26; localStorage.setItem("km_precio", String(precioKm)); alert("Precio demo: " + precioKm.toFixed(2) + " €/km"); };
   $("btn-pdf-coord").onclick = async () => {
     const { desde, hasta } = rangoCoord();
@@ -1065,9 +1065,10 @@ async function initCoord() {
   $("desde-coord").value = primerDia(); $("hasta-coord").value = ultimoDia();
   const { data: profs } = await sb.from("profiles").select("*").eq("rol", "profesor").order("nombre");
   $("pdf-user").innerHTML = (profs || []).map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join("");
+  $("filtro-prof").innerHTML = `<option value="">Todos</option>` + (profs || []).map(p => `<option value="${esc(p.nombre)}">${esc(p.nombre)}</option>`).join("");
   $("precio").value = String(precioKm).replace(".", ",");
   $("btn-ver").onclick = cargarCoord;
-  $("filtro-prof").oninput = cargarCoord;
+  $("filtro-prof").onchange = cargarCoord;
   $("desde-coord").onchange = cargarCoord; $("hasta-coord").onchange = cargarCoord;
   $("btn-precio").onclick = async () => {
     const v = $("precio").value.replace(",", ".");
