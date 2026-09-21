@@ -130,3 +130,16 @@ table.dash .barcell{width:34%}
 .charts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0}
 .chartbox{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;height:270px}
 @media(max-width:700px){.grid,.grid.linea-curso{grid-template-columns:1fr}header h1{font-size:16px}.cert-linea{flex-wrap:wrap}.charts{grid-template-columns:1fr}}
+/* Acceso: tarjeta oscura con banda amarilla, candado y boton rojo */
+.login-card{max-width:430px;margin:42px auto;background:#41454f;border-radius:16px;box-shadow:0 8px 30px #0006;overflow:visible;padding:0}
+.login-head{background:linear-gradient(180deg,#ffc21c,#ff9d00);border-radius:16px 16px 0 0;padding:18px 24px;position:relative}
+.login-head h2{margin:0;padding:0;border:none;color:#fff;font-size:30px;font-weight:800;text-shadow:0 2px 3px #0006}
+.login-lock{position:absolute;right:24px;top:100%;transform:translateY(-50%);background:linear-gradient(180deg,#e8274f,#c21435);border-radius:22px;width:84px;height:84px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 10px #0007}
+.login-body{padding:30px 28px 22px;display:flex;flex-direction:column;gap:14px}
+.login-body input{background:#fff;border:none;border-radius:10px;padding:15px 18px;font-size:18px;width:100%}
+.login-body #btn-login{background:linear-gradient(180deg,#e8274f,#c21435);color:#fff;border:none;border-radius:10px;padding:14px;font-size:22px;font-weight:800;letter-spacing:1px;text-transform:uppercase;width:100%;margin:0}
+.login-body #btn-login:hover{filter:brightness(1.08)}
+.login-body .error{color:#ff9aae;font-weight:700;text-align:center;margin:0}
+.login-body .error:empty{display:none}
+.login-ayuda{color:#cfd3dc;font-size:13px;text-align:center;margin:2px 0 0}
+.login-ayuda code{color:#fff}

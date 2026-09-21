@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kilometraje · Profesores</title>
-<link rel="stylesheet" href="style.css?v=20260920c">
+<link rel="stylesheet" href="style.css?v=20260920d">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
@@ -17,14 +17,19 @@
 <button id="btn-salir-demo">Salir de demo</button></div>
 <main>
   <!-- Login -->
-  <section id="v-login" class="card">
-    <h2>🔑 Acceso</h2>
-    <input id="email" type="email" placeholder="email" autocomplete="username">
-    <input id="pass" type="password" placeholder="contraseña" autocomplete="current-password">
-    <button id="btn-login">Entrar</button>
-    <p class="muted">Te crea la cuenta el coordinador en Supabase &gt; Authentication &gt; Add user.<br>
-    El rol (profesor/coordinador) se cambia en la tabla <code>profiles</code>.</p>
-    <p id="login-err" class="error"></p>
+  <section id="v-login" class="login-card">
+    <div class="login-head">
+      <h2>Acceso</h2>
+      <span class="login-lock" aria-hidden="true"><svg viewBox="0 0 24 24" width="42" height="42"><rect x="5" y="10" width="14" height="10" rx="2" fill="#fff"/><path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke="#fff" stroke-width="2.4"/><circle cx="12" cy="15" r="1.6" fill="#c21435"/></svg></span>
+    </div>
+    <div class="login-body">
+      <input id="email" type="email" placeholder="Correo electrónico" autocomplete="username">
+      <input id="pass" type="password" placeholder="Contraseña" autocomplete="current-password">
+      <button id="btn-login">Entrar</button>
+      <p id="login-err" class="error"></p>
+      <p class="login-ayuda">¿Olvidaste la contraseña? Pide al coordinador que te la restablezca.<br>
+      Las cuentas las crea el coordinador (rol profesor/coordinador en la tabla <code>profiles</code>).</p>
+    </div>
   </section>
 
   <!-- Profesor -->
