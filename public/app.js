@@ -615,7 +615,12 @@ async function entrarEdicion(id) {
   }
   $("btn-save").textContent = "Actualizar viaje";
   $("btn-cancel-edit").hidden = false;
-  $("btn-save").scrollIntoView({ behavior: "smooth", block: "center" });
+  const tit = $("sec-viaje");
+  if (tit) {
+    tit.textContent = "✎ Editando viaje del " + String(v.fecha || "").split("-").reverse().join("/") + " — modifica y pulsa «Actualizar viaje»";
+    tit.classList.add("sec-editando");
+  }
+  (tit || $("btn-save")).scrollIntoView({ behavior: "smooth", block: "center" });
 }
 function salirEdicion() {
   editandoId = null;
@@ -626,6 +631,8 @@ function salirEdicion() {
   $("rutas-opciones").innerHTML = "";
   $("btn-save").textContent = "Guardar viaje";
   $("btn-cancel-edit").hidden = true;
+  const tit = $("sec-viaje");
+  if (tit) { tit.textContent = "🚗 Nuevo viaje"; tit.classList.remove("sec-editando"); }
 }
 $("btn-cancel-edit").onclick = salirEdicion;
 /* Mis datos: domicilio para el origen por defecto (nombre y DNI los gestiona la coordinadora) */
