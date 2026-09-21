@@ -244,7 +244,7 @@ function entrarDemo() {
   // En demo se muestran los dos paneles: pruebas como profesora y como coordinadora
   $("v-prof").hidden = false; $("v-coord").hidden = false;
   $("desde-prof").value = primerDia(); $("hasta-prof").value = ultimoDia(); $("f-fecha").valueAsDate = new Date();
-  $("prof-nombre").textContent = perfil.nombre;
+  if ($("prof-nombre")) $("prof-nombre").textContent = perfil.nombre;
   cargarDatos();
   $("desde-coord").value = primerDia(); $("hasta-coord").value = ultimoDia(); $("precio").value = String(precioKm).replace(".", ",");
   $("pdf-user").innerHTML = `<option value="demo">${perfil.nombre}</option>`;
@@ -274,7 +274,7 @@ async function arrancar() {
   $("sesion").innerHTML = `${perfil.nombre || user.email} (${perfil.rol}) <button id="out">Salir</button>`;
   $("out").onclick = async () => { await sb.auth.signOut(); location.reload(); };
   if (perfil.rol === "coordinador") { $("v-coord").hidden = false; initCoord(); }
-  else { $("v-prof").hidden = false; $("desde-prof").value = primerDia(); $("hasta-prof").value = ultimoDia(); $("f-fecha").valueAsDate = new Date(); $("prof-nombre").textContent = perfil.nombre || ""; cargarDatos(); cargarProf(); }
+  else { $("v-prof").hidden = false; $("desde-prof").value = primerDia(); $("hasta-prof").value = ultimoDia(); $("f-fecha").valueAsDate = new Date(); if ($("prof-nombre")) $("prof-nombre").textContent = perfil.nombre || ""; cargarDatos(); cargarProf(); }
 }
 if (sb) sb.auth.onAuthStateChange((_e, s) => { if (s?.user && !perfil && !DEMO) arrancarUnaVez(); });
 // Un solo arranque en vuelo: al recargar, la sesión inicial y la llamada
@@ -651,7 +651,7 @@ $("btn-datos").onclick = async () => {
     }
     if (error) { alert(error.message); return; }
   }
-  $("prof-nombre").textContent = nombre;
+  if ($("prof-nombre")) $("prof-nombre").textContent = nombre;
   if (!$("f-origen").value) $("f-origen").value = domicilio;
   alert("Datos guardados. Saldrán en la hoja del PDF y tu dirección será el origen por defecto.");
 };
