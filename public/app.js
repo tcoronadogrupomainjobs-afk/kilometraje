@@ -249,7 +249,7 @@ function entrarDemo() {
   cargarDatos();
   $("desde-coord").value = primerDia(); $("hasta-coord").value = ultimoDia(); $("precio").value = String(precioKm).replace(".", ",");
   if ($("pdf-user")) $("pdf-user").innerHTML = `<option value="demo">${perfil.nombre}</option>`;
-  $("filtro-prof").onchange = cargarCoord; $("desde-coord").onchange = cargarCoord; $("hasta-coord").onchange = cargarCoord;
+  $("filtro-prof").onchange = cargarCoord; $("desde-coord").onchange = cargarCoord; $("hasta-coord").onchange = cargarCoord; $("f-excluir-prueba").onchange = cargarCoord;
   $("btn-exp-coord").onclick = exportarCoordExcel; $("btn-imp-coord").onclick = () => $("f-imp-coord").click();
   $("f-imp-coord").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importarCoordExcel(f); };
   $("btn-precio").onclick = () => { precioKm = parseFloat($("precio").value.replace(",", ".")) || 0.26; localStorage.setItem("km_precio", String(precioKm)); alert("Precio demo: " + precioKm.toFixed(2) + " €/km"); };
@@ -1179,6 +1179,9 @@ async function initCoord() {
   $("btn-imp-coord").onclick = () => $("f-imp-coord").click();
   $("f-imp-coord").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importarCoordExcel(f); };
   $("desde-coord").onchange = cargarCoord; $("hasta-coord").onchange = cargarCoord;
+  const exP = localStorage.getItem("km_excluir_prueba");
+  $("f-excluir-prueba").checked = exP === null ? true : exP === "1";
+  $("f-excluir-prueba").onchange = e => { try { localStorage.setItem("km_excluir_prueba", e.target.checked ? "1" : "0"); } catch {} cargarCoord(); };
   $("btn-precio").onclick = async () => {
     const v = $("precio").value.replace(",", ".");
     const { error } = await sb.from("settings").upsert({ clave: "precio_km", valor: v });
@@ -1216,6 +1219,7 @@ async function cargarCoord() {
     if (f) q = q.ilike("profiles.nombre", `%${f}%`);
     data = (await q).data;
   }
+  if ($("f-excluir-prueba").checked) data = (data || []).filter(v => !/prueba/i.test((v.profiles && v.profiles.nombre) || ""));
   const tb = $("t-coord").querySelector("tbody"); tb.innerHTML = "";
   let tot = 0, totKm = 0;
   data = agrupCoord ? ordenarComoPdf(data) : (data || []).sort(compararViajes(ordenCoord.campo, ordenCoord.dir));

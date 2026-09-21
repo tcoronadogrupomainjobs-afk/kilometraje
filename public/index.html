@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kilometraje · Profesores</title>
-<link rel="stylesheet" href="style.css?v=20260920e">
+<link rel="stylesheet" href="style.css?v=20260920f">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
@@ -97,6 +97,7 @@
       <label>Hasta <input type="date" id="hasta-coord"></label>
       <label>Profesor <select id="filtro-prof"><option value="">Todos</option></select></label>
       <button id="btn-agrup-coord" title="Ordenar como en el PDF: por fecha juntando cada curso">Agrupar por curso</button>
+      <label class="derecha" title="Oculta los viajes del profesor de prueba"><input type="checkbox" id="f-excluir-prueba" checked> Excluir profesor de prueba</label>
     </div>
     <div class="row">
       <label>Precio €/km <input id="precio" size="4" value="0.26"></label>
@@ -120,6 +121,6 @@
 <!-- Al cambiar app.js, sube el ?v= para que el navegador no use la version en cache -->
 <script src="config.js?v=20260919"></script>
 <script src="logo.js?v=20260918"></script>
-<script src="app.js?v=20260920k"></script>
+<script src="app.js?v=20260920l"></script>
 </body>
 </html>
