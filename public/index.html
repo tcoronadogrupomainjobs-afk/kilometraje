@@ -10,6 +10,7 @@
 <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
 <header><h1>🚗 Hoja de kilometraje</h1><div id="sesion"></div></header>
@@ -103,6 +104,9 @@
       <button id="btn-precio">Guardar precio</button>
       <button id="btn-pdf-coord" class="primary" title="Genera la hoja del profesor elegido en el filtro de arriba">📄 PDF del profesor</button>
       <button id="btn-archivar-coord" title="Descarga el PDF final del profesor elegido en el filtro como copia y borra de la nube sus certificados y tickets del periodo (los viajes se conservan)">🗄️ Archivar periodo</button>
+      <button id="btn-exp-coord" title="Descarga los viajes visibles en Excel">📥 Exportar Excel</button>
+      <button id="btn-imp-coord" title="Importa viajes desde un Excel (columnas: Fecha, Origen, Destino, Km, Curso)">📤 Importar Excel</button>
+      <input type="file" id="f-imp-coord" accept=".xlsx,.xls,.csv" hidden>
     </div>
     <div class="tabla-scroll">
     <table id="t-coord"><thead><tr>
@@ -117,6 +121,6 @@
 <!-- Al cambiar app.js, sube el ?v= para que el navegador no use la version en cache -->
 <script src="config.js?v=20260919"></script>
 <script src="logo.js?v=20260918"></script>
-<script src="app.js?v=20260920i"></script>
+<script src="app.js?v=20260920j"></script>
 </body>
 </html>

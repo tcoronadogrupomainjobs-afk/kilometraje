@@ -250,6 +250,8 @@ function entrarDemo() {
   $("desde-coord").value = primerDia(); $("hasta-coord").value = ultimoDia(); $("precio").value = String(precioKm).replace(".", ",");
   if ($("pdf-user")) $("pdf-user").innerHTML = `<option value="demo">${perfil.nombre}</option>`;
   $("btn-ver").onclick = cargarCoord; $("filtro-prof").onchange = cargarCoord; $("desde-coord").onchange = cargarCoord; $("hasta-coord").onchange = cargarCoord;
+  $("btn-exp-coord").onclick = exportarCoordExcel; $("btn-imp-coord").onclick = () => $("f-imp-coord").click();
+  $("f-imp-coord").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importarCoordExcel(f); };
   $("btn-precio").onclick = () => { precioKm = parseFloat($("precio").value.replace(",", ".")) || 0.26; localStorage.setItem("km_precio", String(precioKm)); alert("Precio demo: " + precioKm.toFixed(2) + " €/km"); };
   $("btn-pdf-coord").onclick = async () => {
     const { desde, hasta } = rangoCoord();
@@ -1064,9 +1066,100 @@ $("btn-archivar-coord").onclick = async () => {
   await archivarRango(v || [], p, desde, hasta, uid);
 };
 
+/* ---------- Excel del coordinador (exporta lo visible, importa viajes) ---------- */
+function exportarCoordExcel() {
+  if (!window.XLSX) { alert("No se pudo cargar la librería Excel (¿sin internet?)."); return; }
+  const { desde, hasta } = rangoCoord();
+  if (!ultimosCoord.length) { alert("Sin viajes en ese periodo."); return; }
+  const filas = ultimosCoord.map(v => ({
+    "Fecha": fmtFecha(v.fecha),
+    "Profesor": (v.profiles && v.profiles.nombre) || "",
+    "Origen": v.origen || "",
+    "Destino": v.destino || "",
+    "Km": +v.km || 0,
+    "€/km": String(v.precio_km).replace(".", ","),
+    "Total €": String(v.total).replace(".", ","),
+    "Código": v.motivo_codigo || "",
+    "Curso": v.motivo_curso || "",
+    "Observaciones": v.observaciones || "",
+    "Certificado": ultimosCertMap[String(v.id)] ? "Sí" : "No"
+  }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas), "Viajes");
+  XLSX.writeFile(wb, `Kilometraje_${desde}_${hasta}.xlsx`);
+}
+const normCab = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+function parseFechaImp(x) {
+  if (x == null || x === "") return null;
+  if (x instanceof Date && !isNaN(x)) return x.toISOString().slice(0, 10);
+  if (typeof x === "number") {
+    const d = (window.XLSX && XLSX.SSF) ? XLSX.SSF.parse_date_code(x) : null;
+    if (d) return `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
+    return null;
+  }
+  const s = String(x).trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  return null;
+}
+async function importarCoordExcel(file) {
+  if (!window.XLSX) { alert("No se pudo cargar la librería Excel (¿sin internet?)."); return; }
+  const buf = await file.arrayBuffer();
+  let filas;
+  try {
+    const wb = XLSX.read(buf);
+    filas = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
+  } catch (e) { alert("No se pudo leer el archivo: " + e.message); return; }
+  if (!filas.length) { alert("El Excel no tiene filas."); return; }
+  const filtroNombre = $("filtro-prof").value;
+  let profFijo = (filtroNombre && mapaProfs[filtroNombre]) || null;
+  if (DEMO && !profFijo) profFijo = { id: perfil.id, nombre: perfil.nombre };
+  if (filtroNombre && !profFijo && !DEMO) {
+    const { data } = await sb.from("profiles").select("*").eq("nombre", filtroNombre).single();
+    profFijo = data;
+  }
+  const buenos = [], malos = [];
+  filas.forEach((r, i) => {
+    const o = {};
+    Object.entries(r).forEach(([k, v]) => o[normCab(k)] = v);
+    const fecha = parseFechaImp(o.fecha);
+    const origen = String(o.origen || "").trim(), destino = String(o.destino || "").trim();
+    const km = parseFloat(String(o.km).replace(",", "."));
+    let uid = null;
+    if (profFijo) uid = profFijo.id;
+    else {
+      const np = String(o.profesor || o.profesora || "").trim();
+      const clave = Object.keys(mapaProfs).find(k => k.toLowerCase() === np.toLowerCase());
+      if (clave) uid = mapaProfs[clave].id;
+    }
+    const cod = String(o.codigo || "").trim();
+    const curso = String(o.curso || o.motivo || "").trim();
+    const obs = String(o.observaciones || o.observacion || "").trim();
+    if (!fecha || !origen || !destino || !(km > 0) || !uid || !curso) { malos.push(i + 2); return; }
+    const total = Math.round(km * precioKm * 100) / 100;
+    buenos.push({ user_id: uid, fecha, origen, via: "", destino, km, motivo_codigo: cod, motivo_curso: curso, precio_km: precioKm, total, origen_geo: "", via_geo: "", destino_geo: "", manual: false, observaciones: obs, ruta_url: "", proveedor: "excel" });
+  });
+  if (!buenos.length) { alert("Sin filas válidas. Columnas: Fecha, Origen, Destino, Km, Curso" + (profFijo ? "" : " y Profesor") + (malos.length ? ". Filas con error: " + malos.join(", ") : "")); return; }
+  const quien = profFijo ? profFijo.nombre : "sus profesores";
+  if (!confirm(`Importar ${buenos.length} viaje(s) para ${quien}?` + (malos.length ? ` (${malos.length} fila(s) con error se omitirán: ${malos.join(", ")})` : ""))) return;
+  if (DEMO) {
+    const v = demoSeed();
+    buenos.forEach(b => v.push({ id: Date.now() + Math.floor(Math.random() * 1e6), ...b }));
+    demoGuardar(v);
+  } else {
+    const { error } = await sb.from("viajes").insert(buenos);
+    if (error) { alert(error.message); return; }
+  }
+  alert(`${buenos.length} viaje(s) importados.` + (malos.length ? ` Filas omitidas: ${malos.join(", ")}.` : ""));
+  cargarCoord();
+}
+
 /* ---------- coordinador (tiempo real) ---------- */
 let canal = null;
 let mapaProfs = {}; // nombre -> perfil (para PDF/archivar segun el filtro)
+let ultimosCoord = [], ultimosCertMap = {}; // ultima tabla del coordinador (para Excel)
 /* Profesor elegido en el filtro de arriba (lo usan PDF y Archivar) */
 async function profFiltroCoord() {
   const nombre = $("filtro-prof").value;
@@ -1083,6 +1176,9 @@ async function initCoord() {
   $("precio").value = String(precioKm).replace(".", ",");
   $("btn-ver").onclick = cargarCoord;
   $("filtro-prof").onchange = cargarCoord;
+  $("btn-exp-coord").onclick = exportarCoordExcel;
+  $("btn-imp-coord").onclick = () => $("f-imp-coord").click();
+  $("f-imp-coord").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importarCoordExcel(f); };
   $("desde-coord").onchange = cargarCoord; $("hasta-coord").onchange = cargarCoord;
   $("btn-precio").onclick = async () => {
     const v = $("precio").value.replace(",", ".");
@@ -1124,6 +1220,7 @@ async function cargarCoord() {
   const tb = $("t-coord").querySelector("tbody"); tb.innerHTML = "";
   let tot = 0, totKm = 0;
   data = agrupCoord ? ordenarComoPdf(data) : (data || []).sort(compararViajes(ordenCoord.campo, ordenCoord.dir));
+  ultimosCoord = data || [];
   const colores = mapaColoresCursos(data);
   const idsCoord = (data || []).map(v => v.id);
   const certMap = {};
@@ -1132,6 +1229,7 @@ async function cargarCoord() {
       : ((await sb.from("certificados").select("viaje_id,nombre,path,tipo").in("viaje_id", idsCoord)).data || []);
     listaC.forEach(c => certMap[String(c.viaje_id)] = c);
   }
+  ultimosCertMap = certMap;
   if (turno !== turnoCoord) return; // una carga más reciente tomó el relevo
   const celdaC = v => certMap[String(v.id)]
     ? `<td class="st ok"><button class="ibtn sm" data-vercert="${v.id}" title="Ver certificado: ${esc(certMap[String(v.id)].nombre || "")}">📜</button></td>`
