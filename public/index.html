@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kilometraje · Profesores</title>
-<link rel="stylesheet" href="style.css?v=20260920b">
+<link rel="stylesheet" href="style.css?v=20260920c">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
@@ -43,10 +43,12 @@
       <button id="btn-pdf" class="primary">📄 Generar PDF</button>
       <button id="btn-correo" title="Genera el PDF y un correo de Outlook listo para enviar">✉️ Crear correo</button>
     </div>
+    <div class="tabla-scroll">
     <table id="t-prof"><thead><tr>
       <th id="th-fecha-prof" class="sortable" title="Ordenar por fecha">Fecha</th><th>Origen → Destino (ida-vuelta)</th><th>Km</th>
       <th>€/km</th><th>Total</th><th id="th-motivo-prof" class="sortable" title="Ordenar por motivo">Motivo</th><th>Observaciones</th><th>CERT.</th><th></th>
     </tr></thead><tbody></tbody></table>
+    </div>
     <div class="row"><span id="total-prof" class="total"></span></div>
     <h3 id="sec-viaje" class="sec sec-viaje">🚗 Nuevo viaje</h3>
     <div class="grid linea-curso">
@@ -98,9 +100,11 @@
       <button id="btn-pdf-coord" class="primary">📄 PDF del profesor</button>
       <button id="btn-archivar-coord" title="Descarga el PDF final del profesor como copia y borra de la nube sus certificados y tickets del periodo (los viajes se conservan)">🗄️ Archivar periodo</button>
     </div>
+    <div class="tabla-scroll">
     <table id="t-coord"><thead><tr>
       <th id="th-fecha-coord" class="sortable" title="Ordenar por fecha">Fecha</th><th>Profesor</th><th>Desplazamiento</th><th>Km</th><th>Total</th><th id="th-motivo-coord" class="sortable" title="Ordenar por motivo">Motivo</th><th>Observaciones</th><th>CERT.</th>
     </tr></thead><tbody></tbody></table>
+    </div>
     <div class="row"><span id="total-coord" class="total"></span></div>
     <h3 class="sec">📊 Resumen por profesor</h3>
     <div id="resumen-coord"></div>
@@ -109,6 +113,6 @@
 <!-- Al cambiar app.js, sube el ?v= para que el navegador no use la version en cache -->
 <script src="config.js?v=20260919"></script>
 <script src="logo.js?v=20260918"></script>
-<script src="app.js?v=20260920d"></script>
+<script src="app.js?v=20260920e"></script>
 </body>
 </html>

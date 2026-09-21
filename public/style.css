@@ -51,17 +51,36 @@ th,td{padding:8px 10px;text-align:left}
 thead th{background:var(--pri-d);color:#fff;font-size:12px;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}
 th.sortable{cursor:pointer;user-select:none}
 th.sortable:hover{background:#1e3a5f}
-/* Las tablas aprovechan el ancho: solo Motivo/Observaciones/Origen parten linea;
-   fecha, km, importes y botones van en una sola linea */
-#t-prof th,#t-prof td,#t-coord th,#t-coord td{white-space:nowrap;vertical-align:top}
-#t-prof th:nth-child(2),#t-prof td:nth-child(2),
-#t-prof th:nth-child(6),#t-prof td:nth-child(6),
-#t-prof th:nth-child(7),#t-prof td:nth-child(7),
-#t-coord th:nth-child(3),#t-coord td:nth-child(3),
-#t-coord th:nth-child(6),#t-coord td:nth-child(6),
-#t-coord th:nth-child(7),#t-coord td:nth-child(7){white-space:normal}
-#t-prof td:nth-child(6),#t-coord td:nth-child(6){min-width:220px}
-#t-prof td:last-child,#t-coord td:last-child{white-space:nowrap}
+/* Cada viaje en una sola linea: layout fijo, todo recortado con puntos;
+   Desplazamiento ancho, Observaciones estrecha con boton mas/menos */
+#t-prof,#t-coord{table-layout:fixed}
+#t-prof th,#t-prof td,#t-coord th,#t-coord td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+#t-prof th:nth-child(1),#t-prof td:nth-child(1){width:104px}
+#t-prof th:nth-child(2),#t-prof td:nth-child(2){width:31%}
+#t-prof th:nth-child(3),#t-prof td:nth-child(3){width:56px}
+#t-prof th:nth-child(4),#t-prof td:nth-child(4){width:74px}
+#t-prof th:nth-child(5),#t-prof td:nth-child(5){width:88px}
+#t-prof th:nth-child(6),#t-prof td:nth-child(6){width:18%}
+#t-prof th:nth-child(7),#t-prof td:nth-child(7){width:11%}
+#t-prof th:nth-child(8),#t-prof td:nth-child(8){width:66px}
+#t-prof th:last-child,#t-prof td:last-child{width:102px;text-overflow:clip}
+#t-coord th:nth-child(1),#t-coord td:nth-child(1){width:104px}
+#t-coord th:nth-child(2),#t-coord td:nth-child(2){width:13%}
+#t-coord th:nth-child(3),#t-coord td:nth-child(3){width:31%}
+#t-coord th:nth-child(4),#t-coord td:nth-child(4){width:56px}
+#t-coord th:nth-child(5),#t-coord td:nth-child(5){width:88px}
+#t-coord th:nth-child(6),#t-coord td:nth-child(6){width:18%}
+#t-coord th:nth-child(7),#t-coord td:nth-child(7){width:11%}
+#t-coord th:last-child,#t-coord td:last-child{width:66px}
+/* En pantallas estrechas scroll horizontal en vez de recortar botones */
+.tabla-scroll{overflow-x:auto;margin-top:8px;border:1px solid var(--line);border-radius:10px}
+.tabla-scroll table{margin-top:0;border:none;border-radius:0;min-width:1060px}
+td.rec .rec-wrap{display:flex;align-items:center;gap:4px;min-width:0}
+td.rec .rec-txt{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.rec.abierto{white-space:normal}
+td.rec.abierto .rec-txt{white-space:normal;overflow:visible}
+button.rec-mas{flex:none;display:none;background:none;border:none;color:var(--pri);font-size:12px;font-weight:700;padding:0 2px;white-space:nowrap}
+td.rec.con-mas button.rec-mas{display:block}
 tbody td{border-top:1px solid var(--line)}
 tbody tr:nth-child(even){background:#f5f8fd}
 tbody tr:hover{background:#e7f0fd}

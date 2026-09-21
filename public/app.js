@@ -317,8 +317,8 @@ async function cargarProf() {
     tb.innerHTML += `<tr style="background:${colores[claveCurso(v)]}"><td>${v.fecha.split("-").reverse().join("/")}</td>
       <td title="${esc(tituloRuta(v))}">${esc(textoRuta(v))}${iconoRuta(v)}</td><td${v.manual ? ' class="km-manual" title="Km manual — autorizado por coordinadora"' : ""}>${v.km}</td>
       <td>${String(v.precio_km).replace(".", ",")} €</td><td>${fmtES(+v.total)}</td>
-      <td>${esc((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}</td>
-      <td>${esc(v.observaciones)}</td>
+      ${celdaRecorte((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}
+      ${celdaObs(v)}
       ${celdaC(v)}
       <td><button class="ibtn" data-edit="${v.id}" title="Editar">✎</button> <button class="ibtn danger" data-del="${v.id}" title="Borrar">✕</button></td></tr>`;
   });
@@ -343,8 +343,44 @@ async function cargarProf() {
     }
     salirEdicion(); cargarProf(); if (!$("v-coord").hidden) cargarCoord();
   });
+  marcarRecortes(tb);
 }
 function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+/* Celdas recortadas a una linea (Motivo y Observaciones): boton mas/menos muestra el texto completo */
+function celdaRecorte(t) {
+  t = esc(t || "");
+  if (!t) return `<td class="rec"></td>`;
+  return `<td class="rec" title="${t}"><span class="rec-wrap"><span class="rec-txt">${t}</span><button class="rec-mas" type="button" title="Ver texto completo">más</button></span></td>`;
+}
+function celdaObs(v) {
+  return celdaRecorte(v.observaciones);
+}
+document.addEventListener("click", e => {
+  const b = e.target && e.target.closest ? e.target.closest(".rec-mas") : null;
+  if (!b) return;
+  const td = b.closest("td.rec");
+  if (!td) return;
+  const abierto = td.classList.toggle("abierto");
+  b.textContent = abierto ? "menos" : "más";
+  if (!abierto) marcarRecortes(td);
+});
+/* Muestra el boton mas solo donde el texto desborda la columna */
+function marcarRecortes(raiz) {
+  const base = raiz || document;
+  const celdas = Array.from(base.querySelectorAll("td.rec"));
+  if (base.matches && base.matches("td.rec")) celdas.push(base);
+  celdas.forEach(td => {
+    if (td.classList.contains("abierto")) { td.classList.add("con-mas"); return; }
+    const txt = td.querySelector(".rec-txt");
+    if (!txt) return;
+    td.classList.toggle("con-mas", txt.scrollWidth > txt.clientWidth + 1);
+  });
+}
+let tmRecortes = null;
+window.addEventListener("resize", () => {
+  clearTimeout(tmRecortes);
+  tmRecortes = setTimeout(() => marcarRecortes(document), 200);
+});
 /* Orden de las tablas web: clic en Fecha o Motivo (repite para invertir) */
 let ordenProf = { campo: "fecha", dir: 1 };
 let ordenCoord = { campo: "fecha", dir: 1 };
@@ -1087,11 +1123,12 @@ async function cargarCoord() {
     tot += +v.total;
     tb.innerHTML += `<tr style="background:${colores[claveCurso(v)]}"><td>${v.fecha.split("-").reverse().join("/")}</td><td>${esc(v.profiles.nombre)}</td>
       <td title="${esc(tituloRuta(v))}">${esc(textoRuta(v))}${iconoRuta(v)}</td><td${v.manual ? ' class="km-manual" title="Km manual — autorizado por coordinadora"' : ""}>${v.km}</td><td>${fmtES(+v.total)}</td>
-      <td>${esc((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}</td><td>${esc(v.observaciones)}</td>${celdaC(v)}</tr>`;
+      ${celdaRecorte((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}${celdaObs(v)}${celdaC(v)}</tr>`;
   });
   $("total-coord").textContent = "Total: " + fmtES(tot);
   renderResumen(data || [], certMap, turno);
   tb.querySelectorAll("[data-vercert]").forEach(b => b.onclick = () => verCertCoord(certMap[b.dataset.vercert]));
+  marcarRecortes(tb);
 }
 /* Resumen por profesor del periodo visible: compara actividad de un vistazo.
    Usa los filtros de fecha y profesora de la parte superior. */
