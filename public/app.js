@@ -249,7 +249,7 @@ function entrarDemo() {
   cargarDatos();
   $("desde-coord").value = primerDia(); $("hasta-coord").value = ultimoDia(); $("precio").value = String(precioKm).replace(".", ",");
   if ($("pdf-user")) $("pdf-user").innerHTML = `<option value="demo">${perfil.nombre}</option>`;
-  $("btn-ver").onclick = cargarCoord; $("filtro-prof").onchange = cargarCoord; $("desde-coord").onchange = cargarCoord; $("hasta-coord").onchange = cargarCoord;
+  $("filtro-prof").onchange = cargarCoord; $("desde-coord").onchange = cargarCoord; $("hasta-coord").onchange = cargarCoord;
   $("btn-exp-coord").onclick = exportarCoordExcel; $("btn-imp-coord").onclick = () => $("f-imp-coord").click();
   $("f-imp-coord").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importarCoordExcel(f); };
   $("btn-precio").onclick = () => { precioKm = parseFloat($("precio").value.replace(",", ".")) || 0.26; localStorage.setItem("km_precio", String(precioKm)); alert("Precio demo: " + precioKm.toFixed(2) + " €/km"); };
@@ -1174,7 +1174,6 @@ async function initCoord() {
   mapaProfs = Object.fromEntries((profs || []).map(p => [p.nombre, p]));
   $("filtro-prof").innerHTML = `<option value="">Todos</option>` + (profs || []).map(p => `<option value="${esc(p.nombre)}">${esc(p.nombre)}</option>`).join("");
   $("precio").value = String(precioKm).replace(".", ",");
-  $("btn-ver").onclick = cargarCoord;
   $("filtro-prof").onchange = cargarCoord;
   $("btn-exp-coord").onclick = exportarCoordExcel;
   $("btn-imp-coord").onclick = () => $("f-imp-coord").click();
