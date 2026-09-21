@@ -247,7 +247,7 @@ function entrarDemo() {
   if ($("prof-nombre")) $("prof-nombre").textContent = perfil.nombre;
   cargarDatos();
   $("desde-coord").value = primerDia(); $("hasta-coord").value = ultimoDia(); $("precio").value = String(precioKm).replace(".", ",");
-  $("pdf-user").innerHTML = `<option value="demo">${perfil.nombre}</option>`;
+  if ($("pdf-user")) $("pdf-user").innerHTML = `<option value="demo">${perfil.nombre}</option>`;
   $("btn-ver").onclick = cargarCoord; $("filtro-prof").onchange = cargarCoord; $("desde-coord").onchange = cargarCoord; $("hasta-coord").onchange = cargarCoord;
   $("btn-precio").onclick = () => { precioKm = parseFloat($("precio").value.replace(",", ".")) || 0.26; localStorage.setItem("km_precio", String(precioKm)); alert("Precio demo: " + precioKm.toFixed(2) + " €/km"); };
   $("btn-pdf-coord").onclick = async () => {
@@ -1053,18 +1053,28 @@ async function archivarRango(viajes, prof, desde, hasta, uid) {
 $("btn-archivar-coord").onclick = async () => {
   const { desde, hasta } = rangoCoord();
   if (DEMO) { await archivarRango(demoFiltrarRango(desde, hasta), perfil, desde, hasta); return; }
-  const uid = $("pdf-user").value;
-  const { data: p } = await sb.from("profiles").select("*").eq("id", uid).single();
+  const p = await profFiltroCoord();
+  if (!p) return;
+  const uid = p.id;
   const { data: v } = await sb.from("viajes").select("*").eq("user_id", uid).gte("fecha", desde).lte("fecha", hasta).order("fecha");
   await archivarRango(v || [], p, desde, hasta, uid);
 };
 
 /* ---------- coordinador (tiempo real) ---------- */
 let canal = null;
+let mapaProfs = {}; // nombre -> perfil (para PDF/archivar segun el filtro)
+/* Profesor elegido en el filtro de arriba (lo usan PDF y Archivar) */
+async function profFiltroCoord() {
+  const nombre = $("filtro-prof").value;
+  if (!nombre) { alert("Elige un profesor en el filtro de arriba."); return null; }
+  if (mapaProfs[nombre]) return mapaProfs[nombre];
+  const { data } = await sb.from("profiles").select("*").eq("nombre", nombre).single();
+  return data;
+}
 async function initCoord() {
   $("desde-coord").value = primerDia(); $("hasta-coord").value = ultimoDia();
   const { data: profs } = await sb.from("profiles").select("*").eq("rol", "profesor").order("nombre");
-  $("pdf-user").innerHTML = (profs || []).map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join("");
+  mapaProfs = Object.fromEntries((profs || []).map(p => [p.nombre, p]));
   $("filtro-prof").innerHTML = `<option value="">Todos</option>` + (profs || []).map(p => `<option value="${esc(p.nombre)}">${esc(p.nombre)}</option>`).join("");
   $("precio").value = String(precioKm).replace(".", ",");
   $("btn-ver").onclick = cargarCoord;
@@ -1076,8 +1086,10 @@ async function initCoord() {
     if (!error) { precioKm = +v; alert("Precio actualizado."); }
   };
   $("btn-pdf-coord").onclick = async () => {
-    const uid = $("pdf-user").value, { desde, hasta } = rangoCoord();
-    const { data: p } = await sb.from("profiles").select("*").eq("id", uid).single();
+    const { desde, hasta } = rangoCoord();
+    const p = await profFiltroCoord();
+    if (!p) return;
+    const uid = p.id;
     const { data: v } = await sb.from("viajes").select("*").eq("user_id", uid).gte("fecha", desde).lte("fecha", hasta).order("fecha");
     if (!v?.length) { alert("Sin viajes en ese periodo."); return; }
     const certs = await listarCerts(v);
