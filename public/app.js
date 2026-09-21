@@ -351,8 +351,10 @@ function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;"
 function celdaRecorte(t) {
   t = esc(t || "");
   if (!t) return `<td class="rec"></td>`;
-  return `<td class="rec" title="${t}"><span class="rec-wrap"><span class="rec-txt">${t}</span><button class="rec-mas" type="button" title="Ver texto completo">más</button></span></td>`;
+  return `<td class="rec" title="${t}"><span class="rec-wrap"><span class="rec-txt">${t}</span><button class="rec-mas" type="button" title="Ver texto completo">${SVG_MAS}</button></span></td>`;
 }
+const SVG_MAS = `<svg viewBox="0 0 28 16" width="24" height="14" aria-hidden="true"><rect x="1.5" y="1.5" width="25" height="13" rx="4" fill="none" stroke="currentColor" stroke-width="2.5"/><circle cx="9" cy="8" r="1.8" fill="currentColor" stroke="none"/><circle cx="14" cy="8" r="1.8" fill="currentColor" stroke="none"/><circle cx="19" cy="8" r="1.8" fill="currentColor" stroke="none"/></svg>`;
+const SVG_MENOS = `<svg viewBox="0 0 28 16" width="24" height="14" aria-hidden="true"><rect x="1.5" y="1.5" width="25" height="13" rx="4" fill="none" stroke="currentColor" stroke-width="2.5"/><line x1="9" y1="8" x2="19" y2="8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>`;
 function celdaObs(v) {
   return celdaRecorte(v.observaciones);
 }
@@ -362,7 +364,8 @@ document.addEventListener("click", e => {
   const td = b.closest("td.rec");
   if (!td) return;
   const abierto = td.classList.toggle("abierto");
-  b.textContent = abierto ? "menos" : "más";
+  b.innerHTML = abierto ? SVG_MENOS : SVG_MAS;
+  b.title = abierto ? "Mostrar menos" : "Ver texto completo";
   if (!abierto) marcarRecortes(td);
 });
 /* Muestra el boton mas solo donde el texto desborda la columna */

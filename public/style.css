@@ -79,7 +79,10 @@ td.rec .rec-wrap{display:flex;align-items:center;gap:4px;min-width:0}
 td.rec .rec-txt{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 td.rec.abierto{white-space:normal}
 td.rec.abierto .rec-txt{white-space:normal;overflow:visible}
-button.rec-mas{flex:none;display:none;background:none;border:none;color:var(--pri);font-size:12px;font-weight:700;padding:0 2px;white-space:nowrap}
+td.rec.con-mas:not(.abierto) .rec-txt{text-overflow:clip;-webkit-mask-image:linear-gradient(90deg,#000 78%,transparent 99%);mask-image:linear-gradient(90deg,#000 78%,transparent 99%)}
+button.rec-mas{flex:none;display:none;background:none;border:none;color:#3b4252;padding:0;line-height:0;cursor:pointer;white-space:nowrap}
+button.rec-mas:hover{color:var(--pri)}
+button.rec-mas svg{display:block}
 td.rec.con-mas button.rec-mas{display:block}
 tbody td{border-top:1px solid var(--line)}
 tbody tr:nth-child(even){background:#f5f8fd}
