@@ -35,6 +35,7 @@ const demoFiltrarRango = (desde, hasta) => demoSeed().filter(v => v.fecha >= des
 let perfil = null, precioKm = 0.26, ultimoCalculo = null, editandoId = null;
 const $ = id => document.getElementById(id);
 const fmtES = n => n.toFixed(2).replace(".", ",") + " €";
+const textoTotal = (km, tot) => "Total: " + fmtES(tot) + " (" + Math.round(km).toLocaleString("es-ES") + " km)";
 // Rango de fechas de la hoja (por defecto, mes natural en curso)
 const hoyISO = () => new Date().toISOString().slice(0, 10);
 const primerDia = () => hoyISO().slice(0, 7) + "-01";
@@ -299,7 +300,7 @@ async function cargarProf() {
     data = r.data;
   }
   const tb = $("t-prof").querySelector("tbody"); tb.innerHTML = "";
-  let tot = 0;
+  let tot = 0, totKm = 0;
   data = agrupProf ? ordenarComoPdf(data) : (data || []).sort(compararViajes(ordenProf.campo, ordenProf.dir));
   const colores = mapaColoresCursos(data);
   // Referencia por viaje: 📜 certificado de asistencia
@@ -313,7 +314,7 @@ async function cargarProf() {
   if (turno !== turnoProf) return; // una carga más reciente tomó el relevo
   const celdaC = v => certMap[String(v.id)] ? `<td class="st ok" title="${esc(certMap[String(v.id)])}">✅</td>` : `<td class="st no" title="Sin certificado de asistencia">❌</td>`;
   (data || []).forEach(v => {
-    tot += +v.total;
+    tot += +v.total; totKm += +v.km || 0;
     tb.innerHTML += `<tr style="background:${colores[claveCurso(v)]}"><td>${v.fecha.split("-").reverse().join("/")}</td>
       <td title="${esc(tituloRuta(v))}">${esc(textoRuta(v))}${iconoRuta(v)}</td><td${v.manual ? ' class="km-manual" title="Km manual — autorizado por coordinadora"' : ""}>${v.km}</td>
       <td>${String(v.precio_km).replace(".", ",")} €</td><td>${fmtES(+v.total)}</td>
@@ -322,11 +323,11 @@ async function cargarProf() {
       ${celdaC(v)}
       <td><button class="ibtn" data-edit="${v.id}" title="Editar">✎</button> <button class="ibtn danger" data-del="${v.id}" title="Borrar">✕</button></td></tr>`;
   });
-  $("total-prof").textContent = "Total: " + fmtES(tot);
+  $("total-prof").textContent = textoTotal(totKm, tot);
   tb.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => entrarEdicion(b.dataset.edit));
   renderTickets(); // miniaturas del periodo (también al cambiar fechas)
   renderCerts(data || []); // una linea por viaje para anexar su certificado
-  $("total-prof").textContent = "Total: " + fmtES(tot);
+  $("total-prof").textContent = textoTotal(totKm, tot);
   tb.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
     if (!confirm("¿Borrar este viaje? Sus tickets pasan a 'general del periodo'.")) return;
     if (DEMO) {
@@ -1118,7 +1119,7 @@ async function cargarCoord() {
     data = (await q).data;
   }
   const tb = $("t-coord").querySelector("tbody"); tb.innerHTML = "";
-  let tot = 0;
+  let tot = 0, totKm = 0;
   data = agrupCoord ? ordenarComoPdf(data) : (data || []).sort(compararViajes(ordenCoord.campo, ordenCoord.dir));
   const colores = mapaColoresCursos(data);
   const idsCoord = (data || []).map(v => v.id);
@@ -1133,12 +1134,12 @@ async function cargarCoord() {
     ? `<td class="st ok"><button class="ibtn sm" data-vercert="${v.id}" title="Ver certificado: ${esc(certMap[String(v.id)].nombre || "")}">📜</button></td>`
     : `<td class="st no" title="Sin certificado de asistencia">❌</td>`;
   (data || []).forEach(v => {
-    tot += +v.total;
+    tot += +v.total; totKm += +v.km || 0;
     tb.innerHTML += `<tr style="background:${colores[claveCurso(v)]}"><td>${v.fecha.split("-").reverse().join("/")}</td><td>${esc(v.profiles.nombre)}</td>
       <td title="${esc(tituloRuta(v))}">${esc(textoRuta(v))}${iconoRuta(v)}</td><td${v.manual ? ' class="km-manual" title="Km manual — autorizado por coordinadora"' : ""}>${v.km}</td><td>${fmtES(+v.total)}</td>
       ${celdaRecorte((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}${celdaObs(v)}${celdaC(v)}</tr>`;
   });
-  $("total-coord").textContent = "Total: " + fmtES(tot);
+  $("total-coord").textContent = textoTotal(totKm, tot);
   renderResumen(data || [], certMap, turno);
   tb.querySelectorAll("[data-vercert]").forEach(b => b.onclick = () => verCertCoord(certMap[b.dataset.vercert]));
   marcarRecortes(tb);
