@@ -628,17 +628,17 @@ function salirEdicion() {
   $("btn-cancel-edit").hidden = true;
 }
 $("btn-cancel-edit").onclick = salirEdicion;
-/* Mis datos: nombre, DNI y domicilio para el PDF y el origen por defecto */
+/* Mis datos: domicilio para el origen por defecto (nombre y DNI los gestiona la coordinadora) */
 function cargarDatos() {
-  $("f-nombre").value = perfil.nombre || "";
-  $("f-nif").value = perfil.nif || "";
+  if ($("f-nombre")) $("f-nombre").value = perfil.nombre || "";
+  if ($("f-nif")) $("f-nif").value = perfil.nif || "";
   $("f-domicilio").value = perfil.domicilio || "";
   if (!$("f-origen").value) $("f-origen").value = perfil.domicilio || "";
 }
 $("btn-datos").onclick = async () => {
-  const nombre = $("f-nombre").value.trim(), nif = $("f-nif").value.trim().toUpperCase();
+  const nombre = ($("f-nombre") ? $("f-nombre").value.trim() : perfil.nombre) || perfil.nombre || "",
+    nif = ($("f-nif") ? $("f-nif").value.trim().toUpperCase() : perfil.nif) || perfil.nif || "";
   const domicilio = $("f-domicilio").value.trim();
-  if (!nombre) { alert("Pon tu nombre completo."); return; }
   perfil.nombre = nombre; perfil.nif = nif; perfil.domicilio = domicilio;
   if (DEMO) {
     try { localStorage.setItem("km_perfil_demo", JSON.stringify({ nombre, nif, domicilio })); } catch {}
