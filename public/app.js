@@ -1179,7 +1179,7 @@ async function listarAnuncios() {
   const { data } = await sb.from("anuncios").select("*").order("created_at", { ascending: false });
   return data || [];
 }
-/* Lo que ven las profesoras encima de Mis desplazamientos */
+/* Lo que ven los profesores encima de Mis desplazamientos */
 async function pintarTablon() {
   const box = $("tablon-prof");
   if (!box) return;

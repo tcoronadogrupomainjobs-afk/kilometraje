@@ -199,7 +199,7 @@ update public.tickets set fecha = (mes || '-01')::date where fecha is null;
 
 -- 7. Realtime: ver bloque idempotente al final del archivo
 
--- 10. Tablon de anuncios: la coordinadora publica y las profesoras lo ven
+-- 10. Tablon de anuncios: la coordinadora publica y los profesores lo ven
 create table if not exists public.anuncios (
   id bigint generated always as identity primary key,
   user_id uuid not null references public.profiles(id) on delete cascade,
