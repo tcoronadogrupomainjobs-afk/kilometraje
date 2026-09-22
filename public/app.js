@@ -262,7 +262,7 @@ function entrarDemo() {
     if (sin.length && !confirm(`Hay ${sin.length} viaje(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
     await pdfHoja(perfil, v, { desde, hasta }, { certs, tickets: await listarTickets(desde, hasta) });
   };
-  cargarProf(); cargarCoord();
+  cargarProf(); cargarCoord(); pintarTablon(); listarAnunciosCoord();
 }
 async function arrancar() {
   DEMO = false;
@@ -277,7 +277,8 @@ async function arrancar() {
   $("sesion").innerHTML = `${perfil.nombre || user.email} (${perfil.rol}) <button id="out">Salir</button>`;
   $("out").onclick = async () => { await sb.auth.signOut(); location.reload(); };
   if (perfil.rol === "coordinador") { $("v-coord").hidden = false; initCoord(); }
-  else { $("v-prof").hidden = false; $("desde-prof").value = primerDia(); $("hasta-prof").value = ultimoDia(); $("f-fecha").valueAsDate = new Date(); if ($("prof-nombre")) $("prof-nombre").textContent = perfil.nombre || ""; cargarDatos(); cargarProf(); }
+  else { $("v-prof").hidden = false; $("desde-prof").value = primerDia(); $("hasta-prof").value = ultimoDia(); $("f-fecha").valueAsDate = new Date(); if ($("prof-nombre")) $("prof-nombre").textContent = perfil.nombre || ""; cargarDatos(); cargarProf(); pintarTablon();
+    try { if (canalTablon) sb.removeChannel(canalTablon); canalTablon = sb.channel("tablon-live").on("postgres_changes", { event: "*", schema: "public", table: "anuncios" }, pintarTablon).subscribe(); } catch {} }
 }
 if (sb) sb.auth.onAuthStateChange((_e, s) => { if (s?.user && !perfil && !DEMO) arrancarUnaVez(); });
 // Un solo arranque en vuelo: al recargar, la sesión inicial y la llamada
@@ -1156,6 +1157,97 @@ async function importarCoordExcel(file) {
   cargarCoord();
 }
 
+/* ---------- tablon de anuncios ---------- */
+const ANUN_KEY = "km_anuncios_demo";
+const leerAnunciosDemo = () => { try { return JSON.parse(localStorage.getItem(ANUN_KEY) || "[]"); } catch { return []; } };
+const guardarAnunciosDemo = v => localStorage.setItem(ANUN_KEY, JSON.stringify(v));
+let editandoAnuncio = null, canalTablon = null;
+/* Quita scripts y manejadores antes de guardar/mostrar */
+function sanearHtml(h) {
+  const d = document.createElement("div");
+  d.innerHTML = h;
+  d.querySelectorAll("script,iframe,object,embed,link,style,meta").forEach(n => n.remove());
+  d.querySelectorAll("*").forEach(n => {
+    [...n.attributes].forEach(a => {
+      if (/^on/i.test(a.name) || (a.name === "href" && /^\s*javascript:/i.test(a.value))) n.removeAttribute(a.name);
+    });
+  });
+  return d.innerHTML;
+}
+async function listarAnuncios() {
+  if (DEMO) return leerAnunciosDemo().sort((a, b) => b.id - a.id);
+  const { data } = await sb.from("anuncios").select("*").order("created_at", { ascending: false });
+  return data || [];
+}
+/* Lo que ven las profesoras encima de Mis desplazamientos */
+async function pintarTablon() {
+  const box = $("tablon-prof");
+  if (!box) return;
+  const lista = await listarAnuncios();
+  if (!lista.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<h3 class="sec sec-tablon">📢 Tablón de anuncios</h3>` + lista.map(a =>
+    `<div class="anuncio">${sanearHtml(a.html)}<span class="anuncio-fecha">${new Date(a.created_at).toLocaleString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span></div>`).join("");
+}
+/* Lo que gestiona la coordinadora */
+async function listarAnunciosCoord() {
+  const box = $("anuncios-coord");
+  if (!box) return;
+  const lista = await listarAnuncios();
+  box.innerHTML = lista.length ? "" : '<span class="muted">Sin anuncios publicados.</span>';
+  lista.forEach(a => {
+    const d = document.createElement("div");
+    d.className = "anuncio-item";
+    d.innerHTML = `${sanearHtml(a.html)}<div class="fila-btns"><button class="ibtn" data-ed title="Editar">✎ Editar</button><button class="ibtn danger" data-del title="Borrar">✕ Borrar</button></div>`;
+    d.querySelector("[data-ed]").onclick = () => {
+      editandoAnuncio = a.id;
+      $("anuncio-editor").innerHTML = a.html;
+      $("btn-anuncio-pub").textContent = "Actualizar anuncio";
+      $("btn-anuncio-cancel").hidden = false;
+      $("anuncio-editor").focus();
+    };
+    d.querySelector("[data-del]").onclick = async () => {
+      if (!confirm("¿Borrar este anuncio?")) return;
+      if (DEMO) guardarAnunciosDemo(leerAnunciosDemo().filter(x => String(x.id) !== String(a.id)));
+      else await sb.from("anuncios").delete().eq("id", a.id);
+      pintarTablon(); listarAnunciosCoord();
+    };
+    box.appendChild(d);
+  });
+}
+document.querySelectorAll(".toolbar [data-cmd]").forEach(b => b.onclick = () => { $("anuncio-editor").focus(); document.execCommand(b.dataset.cmd, false, null); });
+$("tb-color").oninput = e => { $("anuncio-editor").focus(); document.execCommand("foreColor", false, e.target.value); };
+$("tb-tam").onchange = e => { $("anuncio-editor").focus(); document.execCommand("fontSize", false, e.target.value); };
+document.querySelectorAll(".toolbar [data-emoji]").forEach(b => b.onclick = () => { $("anuncio-editor").focus(); document.execCommand("insertText", false, b.dataset.emoji); });
+$("btn-anuncio-pub").onclick = async () => {
+  if (!$("anuncio-editor").textContent.trim()) { alert("Escribe el anuncio primero."); return; }
+  const html = sanearHtml($("anuncio-editor").innerHTML);
+  if (DEMO) {
+    const v = leerAnunciosDemo();
+    if (editandoAnuncio) {
+      const i = v.findIndex(x => String(x.id) === String(editandoAnuncio));
+      if (i >= 0) v[i].html = html;
+    } else v.push({ id: Date.now(), user_id: perfil.id, html, created_at: new Date().toISOString() });
+    guardarAnunciosDemo(v);
+  } else if (editandoAnuncio) {
+    const { error } = await sb.from("anuncios").update({ html }).eq("id", editandoAnuncio);
+    if (error) { alert(error.message); return; }
+  } else {
+    const { error } = await sb.from("anuncios").insert({ user_id: perfil.id, html });
+    if (error) { alert(error.message); return; }
+  }
+  editandoAnuncio = null;
+  $("anuncio-editor").innerHTML = "";
+  $("btn-anuncio-pub").textContent = "Publicar anuncio";
+  $("btn-anuncio-cancel").hidden = true;
+  pintarTablon(); listarAnunciosCoord();
+};
+$("btn-anuncio-cancel").onclick = () => {
+  editandoAnuncio = null;
+  $("anuncio-editor").innerHTML = "";
+  $("btn-anuncio-pub").textContent = "Publicar anuncio";
+  $("btn-anuncio-cancel").hidden = true;
+};
+
 /* ---------- coordinador (tiempo real) ---------- */
 let canal = null;
 let mapaProfs = {}; // nombre -> perfil (para PDF/archivar segun el filtro)
@@ -1200,11 +1292,13 @@ async function initCoord() {
     await pdfHoja(p, v, { desde, hasta }, { certs, tickets: await listarTickets(desde, hasta, uid) });
   };
   await cargarCoord();
+  listarAnunciosCoord();
   if (canal) sb.removeChannel(canal); // suscripcion en directo: ve viajes y certificados "a medida que los meten"
   canal = sb.channel("viajes-live")
     .on("postgres_changes", { event: "*", schema: "public", table: "viajes" }, cargarCoord)
     .on("postgres_changes", { event: "*", schema: "public", table: "certificados" }, cargarCoord)
     .on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, cargarCoord)
+    .on("postgres_changes", { event: "*", schema: "public", table: "anuncios" }, () => { listarAnunciosCoord(); pintarTablon(); })
     .subscribe();
 }
 async function cargarCoord() {

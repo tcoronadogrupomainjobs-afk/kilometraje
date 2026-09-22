@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kilometraje · Profesores</title>
-<link rel="stylesheet" href="style.css?v=20260920f">
+<link rel="stylesheet" href="style.css?v=20260920g">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
@@ -35,6 +35,7 @@
 
   <!-- Profesor -->
   <section id="v-prof" class="card" hidden>
+    <div id="tablon-prof"></div>
     <h2>🧭 Mis desplazamientos</h2>
     <h3 class="sec sec-viaje">👤 Mis datos</h3>
     <p class="muted">Tu dirección habitual será el origen por defecto de los viajes nuevos.</p>
@@ -116,12 +117,35 @@
     <div class="row"><span id="total-coord" class="total"></span></div>
     <h3 class="sec">📊 Resumen por profesor</h3>
     <div id="resumen-coord"></div>
+    <h3 class="sec sec-tablon">📢 Tablón de anuncios</h3>
+    <p class="muted">Lo que publiques aquí lo ven las profesoras encima de <i>Mis desplazamientos</i>.</p>
+    <div class="toolbar">
+      <button type="button" data-cmd="bold" title="Negrita"><b>B</b></button>
+      <button type="button" data-cmd="italic" title="Cursiva"><i>I</i></button>
+      <button type="button" data-cmd="underline" title="Subrayado"><u>U</u></button>
+      <input type="color" id="tb-color" value="#1f2937" title="Color del texto">
+      <select id="tb-tam" title="Tamaño del texto">
+        <option value="2">Pequeño</option>
+        <option value="3" selected>Normal</option>
+        <option value="5">Grande</option>
+        <option value="6">Muy grande</option>
+      </select>
+      <span class="emojis" title="Pulsar para insertar">
+        <button type="button" data-emoji="📌">📌</button><button type="button" data-emoji="⚠️">⚠️</button><button type="button" data-emoji="🎉">🎉</button><button type="button" data-emoji="🚗">🚗</button><button type="button" data-emoji="💶">💶</button><button type="button" data-emoji="📅">📅</button><button type="button" data-emoji="✅">✅</button><button type="button" data-emoji="❌">❌</button><button type="button" data-emoji="👍">👍</button><button type="button" data-emoji="📢">📢</button>
+      </span>
+    </div>
+    <div id="anuncio-editor" contenteditable="true" placeholder="Escribe el anuncio…"></div>
+    <div class="row">
+      <button id="btn-anuncio-pub" class="primary">Publicar anuncio</button>
+      <button id="btn-anuncio-cancel" hidden>Cancelar edición</button>
+    </div>
+    <div id="anuncios-coord"></div>
   </section>
 </main>
 <!-- Al cambiar app.js, sube el ?v= para que el navegador no use la version en cache -->
 <script src="config.js?v=20260919"></script>
 <script src="logo.js?v=20260918"></script>
 <script src="firma.js?v=20260922"></script>
-<script src="app.js?v=20260920n"></script>
+<script src="app.js?v=20260920o"></script>
 </body>
 </html>

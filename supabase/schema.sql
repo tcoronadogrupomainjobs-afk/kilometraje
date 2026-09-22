@@ -197,7 +197,37 @@ alter table public.tickets add column if not exists viaje_id bigint references p
 alter table public.tickets add column if not exists fecha date default CURRENT_DATE;
 update public.tickets set fecha = (mes || '-01')::date where fecha is null;
 
--- 7. Realtime (para que el coordinador vea viajes "a medida que los meten")
-alter publication supabase_realtime add table public.viajes;
-alter publication supabase_realtime add table public.certificados;
-alter publication supabase_realtime add table public.tickets;
+-- 7. Realtime: ver bloque idempotente al final del archivo
+
+-- 10. Tablon de anuncios: la coordinadora publica y las profesoras lo ven
+create table if not exists public.anuncios (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  html text not null default '',
+  created_at timestamptz default now()
+);
+alter table public.anuncios enable row level security;
+drop policy if exists "anuncios read" on public.anuncios;
+create policy "anuncios read" on public.anuncios
+  for select using (true);
+drop policy if exists "anuncios write coordi" on public.anuncios;
+create policy "anuncios write coordi" on public.anuncios
+  for all using (public.soy_coordinador()) with check (public.soy_coordinador());
+
+-- 11. Realtime idempotente (se puede ejecutar todo el archivo las veces que sean
+-- sin el error 42710 "already member of publication")
+do $$
+begin
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'viajes') then
+    alter publication supabase_realtime add table public.viajes;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'certificados') then
+    alter publication supabase_realtime add table public.certificados;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'tickets') then
+    alter publication supabase_realtime add table public.tickets;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'anuncios') then
+    alter publication supabase_realtime add table public.anuncios;
+  end if;
+end $$;
