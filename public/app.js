@@ -1456,6 +1456,14 @@ async function pdfHoja(prof, viajes, rango, tickets, soloDatos) {
   doc.setDrawColor(60); doc.setLineWidth(0.6);
   doc.rect(M, pieY + 8, 340, 54);
   doc.rect(ax, pieY + 8, 340, 54);
+  // Firma de Mara en el recuadro AUTORIZADO POR (incrustada en firma.js; respaldo: firma-mara.jpg)
+  try {
+    let F = null;
+    if (window.FIRMA_DATAURL) F = { jpg: window.FIRMA_DATAURL, w: window.FIRMA_W || 286, h: window.FIRMA_H || 192 };
+    else F = logoADataUrl(await cargarImagenTicket("firma-mara.jpg?v=20260922"));
+    const fk = Math.min(328 / F.w, 42 / F.h), fw = F.w * fk, fh = F.h * fk;
+    doc.addImage(F.jpg, "JPEG", ax + (340 - fw) / 2, pieY + 8 + (54 - fh) / 2, fw, fh);
+  } catch (err) { if (window.console) console.warn("Firma no disponible:", err); }
   const anexos = tickets && tickets.certs ? tickets : { certs: [], tickets: tickets || [] };
   // 1) Certificados de asistencia, en el orden de los viajes
   for (const v of (viajes || [])) {
