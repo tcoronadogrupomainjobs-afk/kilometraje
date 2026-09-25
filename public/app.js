@@ -34,8 +34,10 @@ function demoSeed() {
 const demoFiltrarRango = (desde, hasta) => demoSeed().filter(v => v.fecha >= desde && v.fecha <= hasta).sort((a, b) => a.fecha.localeCompare(b.fecha));
 let perfil = null, precioKm = 0.26, ultimoCalculo = null, editandoId = null;
 const $ = id => document.getElementById(id);
+const LIMITE_KM_PERIODO = 950;
+const viajesVisibles = viajes => (viajes || []).filter(v => !v.oculto);
+const textoTotal = (km, tot, superarLimite = false) => `Total: ${fmtES(tot)} (${Math.round(km).toLocaleString("es-ES")} km)${superarLimite ? " · ⚠ Límite de 950 km superado" : ""}`;
 const fmtES = n => n.toFixed(2).replace(".", ",") + " €";
-const textoTotal = (km, tot) => "Total: " + fmtES(tot) + " (" + Math.round(km).toLocaleString("es-ES") + " km)";
 // Rango de fechas de la hoja (por defecto, mes natural en curso)
 const hoyISO = () => new Date().toISOString().slice(0, 10);
 const primerDia = () => hoyISO().slice(0, 7) + "-01";
@@ -255,11 +257,13 @@ function entrarDemo() {
   $("btn-precio").onclick = () => { precioKm = parseFloat($("precio").value.replace(",", ".")) || 0.26; localStorage.setItem("km_precio", String(precioKm)); alert("Precio demo: " + precioKm.toFixed(2) + " €/km"); };
   $("btn-pdf-coord").onclick = async () => {
     const { desde, hasta } = rangoCoord();
-    const v = demoFiltrarRango(desde, hasta);
-    if (!v.length) { alert("Sin viajes en ese periodo."); return; }
+    const v = viajesVisibles(demoFiltrarRango(desde, hasta));
+    if (!v.length) { alert("No hay viajes operativos en ese periodo."); return; }
+    const kmPeriodo = v.reduce((a, x) => a + (+x.km || 0), 0);
+    if (kmPeriodo > LIMITE_KM_PERIODO && !confirm(`El periodo supera el límite de ${LIMITE_KM_PERIODO} km (${Math.round(kmPeriodo)} km). ¿Generar el PDF igualmente?`)) return;
     const certs = await listarCerts(v);
     const sin = faltanCerts(v, certs);
-    if (sin.length && !confirm(`Hay ${sin.length} viaje(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
+    if (sin.length && !confirm(`Hay ${sin.length} curso(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
     await pdfHoja(perfil, v, { desde, hasta }, { certs, tickets: await listarTickets(desde, hasta) });
   };
   cargarProf(); cargarCoord(); pintarTablon(); listarAnunciosCoord();
@@ -305,32 +309,43 @@ async function cargarProf() {
   const tb = $("t-prof").querySelector("tbody"); tb.innerHTML = "";
   let tot = 0, totKm = 0;
   data = agrupProf ? ordenarComoPdf(data) : (data || []).sort(compararViajes(ordenProf.campo, ordenProf.dir));
+  const visibles = viajesVisibles(data);
   const colores = mapaColoresCursos(data);
-  // Referencia por viaje: 📜 certificado de asistencia
-  const idsProf = (data || []).map(v => v.id);
+  const codigos = [...new Set(visibles.map(codigoCurso).filter(Boolean))];
   const certMap = {};
-  if (idsProf.length) {
-    const listaC = DEMO ? leerCertsArray().filter(c => idsProf.map(String).includes(String(c.viaje_id)))
-      : ((await sb.from("certificados").select("viaje_id,nombre").in("viaje_id", idsProf)).data || []);
-    listaC.forEach(c => certMap[String(c.viaje_id)] = c.nombre);
+  if (codigos.length) {
+    const listaC = DEMO ? certDemo().filter(c => codigos.includes(String(c.curso_codigo || "").toUpperCase()))
+      : ((await sb.from("certificados").select("curso_codigo,nombre").in("curso_codigo", codigos.map(c => c.toUpperCase()))).data || []);
+    listaC.forEach(c => certMap[String(c.curso_codigo).toUpperCase()] = c.nombre);
   }
   if (turno !== turnoProf) return; // una carga más reciente tomó el relevo
-  const celdaC = v => certMap[String(v.id)] ? `<td class="st ok" title="${esc(certMap[String(v.id)])}">✅</td>` : `<td class="st no" title="Sin certificado de asistencia">❌</td>`;
+  const celdaC = v => certMap[codigoCurso(v).toUpperCase()] ? `<td class="st ok" title="Certificado del curso ${esc(codigoCurso(v))}">✅</td>` : `<td class="st no" title="Sin certificado para el curso ${esc(codigoCurso(v))}">❌</td>`;
   (data || []).forEach(v => {
-    tot += +v.total; totKm += +v.km || 0;
-    tb.innerHTML += `<tr style="background:${colores[claveCurso(v)]}"><td>${v.fecha.split("-").reverse().join("/")}</td>
+    if (!v.oculto) { tot += +v.total; totKm += +v.km || 0; }
+    const claseFila = v.oculto ? ' class="viaje-oculto" title="Línea oculta: no computa en totales ni PDF"' : '';
+    tb.innerHTML += `<tr${claseFila} style="background:${colores[claveCurso(v)]}"><td>${v.fecha.split("-").reverse().join("/")}</td>
       <td title="${esc(tituloRuta(v))}">${esc(textoRuta(v))}${iconoRuta(v)}</td><td${v.manual ? ' class="km-manual" title="Km manual — autorizado por coordinadora"' : ""}>${v.km}</td>
       <td>${String(v.precio_km).replace(".", ",")} €</td><td>${fmtES(+v.total)}</td>
       ${celdaRecorte((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}
       ${celdaObs(v)}
       ${celdaC(v)}
-      <td><button class="ibtn" data-edit="${v.id}" title="Editar">✎</button> <button class="ibtn danger" data-del="${v.id}" title="Borrar">✕</button></td></tr>`;
+      <td><button class="ibtn" data-edit="${v.id}" title="Editar">✎</button> <button class="ibtn ${v.oculto ? "on" : ""}" data-toggle="${v.id}" title="${v.oculto ? "Mostrar y operar" : "Ocultar línea"}">${v.oculto ? "🙈" : "👁"}</button> <button class="ibtn danger" data-del="${v.id}" title="Borrar">✕</button></td></tr>`;
   });
-  $("total-prof").textContent = textoTotal(totKm, tot);
+  const superarLimite = totKm > LIMITE_KM_PERIODO;
+  $("total-prof").textContent = textoTotal(totKm, tot, superarLimite);
+  $("total-prof").classList.toggle("limite-superado", superarLimite);
+  tb.querySelectorAll("[data-toggle]").forEach(b => b.onclick = async () => {
+    const v = (data || []).find(x => String(x.id) === String(b.dataset.toggle));
+    if (!v) return;
+    const nuevo = !v.oculto;
+    if (DEMO) { const todos = demoSeed(); const x = todos.find(y => String(y.id) === String(v.id)); if (x) x.oculto = nuevo; demoGuardar(todos); }
+    else { const { error } = await sb.from("viajes").update({ oculto: nuevo }).eq("id", v.id); if (error) { alert(error.message); return; } }
+    cargarProf(); if (!$("v-coord").hidden) cargarCoord();
+  });
   tb.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => entrarEdicion(b.dataset.edit));
   renderTickets(); // miniaturas del periodo (también al cambiar fechas)
-  renderCerts(data || []); // una linea por viaje para anexar su certificado
-  $("total-prof").textContent = textoTotal(totKm, tot);
+  renderCerts(visibles); // solo los viajes operativos generan certificados y PDF
+  $("total-prof").textContent = textoTotal(totKm, tot, superarLimite);
   tb.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
     if (!confirm("¿Borrar este viaje? Sus tickets pasan a 'general del periodo'.")) return;
     if (DEMO) {
@@ -338,11 +353,10 @@ async function cargarProf() {
       const arr = leerTicketsArray();
       arr.forEach(t => { if (String(t.viaje_id) === String(b.dataset.del)) t.viaje_id = null; });
       guardarTicketsArray(arr);
-      guardarCertsArray(leerCertsArray().filter(c => String(c.viaje_id) !== String(b.dataset.del)));
+      // El certificado pertenece al curso, no al viaje: se conserva al borrar uno.
     } else {
       await sb.from("tickets").update({ viaje_id: null }).eq("viaje_id", b.dataset.del);
-      const { data: certDel } = await sb.from("certificados").select("*").eq("viaje_id", b.dataset.del);
-      for (const c of (certDel || [])) { await sb.storage.from("certificados").remove([c.path]); await sb.from("certificados").delete().eq("id", c.id); }
+      // El certificado se conserva porque pertenece al curso, no al viaje.
       await sb.from("viajes").delete().eq("id", b.dataset.del);
     }
     salirEdicion(); cargarProf(); if (!$("v-coord").hidden) cargarCoord();
@@ -416,6 +430,24 @@ function pintarOrden() {
 }
 /* Criterio del PDF: por fecha juntando cada curso donde cae su primer viaje */
 const claveCurso = v => `${v.motivo_codigo || ""}|${v.motivo_curso || ""}`;
+// Un curso se identifica exclusivamente por su código, sin espacios ni mayúsculas.
+const codigoCurso = v => String(v && v.motivo_codigo || "").trim().replace(/\s+/g, "").toUpperCase();
+const cursosUnicos = viajes => {
+  const porCodigo = new Map();
+  (viajes || []).forEach(v => {
+    const cod = codigoCurso(v);
+    if (!cod) return;
+    const actual = porCodigo.get(cod);
+    if (!actual || String(v.fecha) < String(actual.fecha)) porCodigo.set(cod, v);
+  });
+  return [...porCodigo.values()].sort((a, b) => {
+    const ca = codigoCurso(a), cb = codigoCurso(b);
+    return ca.localeCompare(cb, "es", { numeric: true });
+  });
+};
+// Número de filas realmente visibles en "Mis desplazamientos" para un curso.
+const numeroViajesCurso = (viajes, codigo) =>
+  (viajes || []).filter(v => codigoCurso(v) === String(codigo || "").trim().replace(/\s+/g, "").toUpperCase()).length;
 function ordenarComoPdf(viajes) {
   const primera = {};
   (viajes || []).forEach(v => { const k = claveCurso(v); if (!primera[k] || String(v.fecha) < primera[k]) primera[k] = String(v.fecha); });
@@ -462,23 +494,35 @@ const cap = s => String(s ?? "").toLowerCase().split(/(\s+|[-–—'])/).map((w,
 const iconoRuta = v => v.ruta_url ? ` <a href="${esc(v.ruta_url)}" target="_blank" rel="noopener" title="Ver ruta calculada en el mapa${v.proveedor && v.proveedor !== "manual" ? " (" + esc(v.proveedor) + ")" : ""}">🛣️</a>` : "";
 // En las tablas web solo se muestra Origen → Destino (el punto intermedio
 // no aparece, aunque sí cuenta en los km, el enlace de ruta y el PDF)
-const textoRuta = v => `${cap(v.origen)} → ${cap(v.destino)}`;
+const sufijoTipo = v => v.tipo_ruta === "ida" ? " · Ida" : " · Ida y vuelta";
+const textoRuta = v => `${cap(v.origen)} → ${cap(v.destino)}${sufijoTipo(v)}`;
 // El punto intermedio no se muestra: solo Origen - Destino (sí cuenta en los km,
 // el enlace de ruta y los datos guardados)
-const textoRutaPDF = v => `${cap(v.origen)} - ${cap(v.destino)}`;
+const textoRutaPDF = v => `${cap(v.origen)} - ${cap(v.destino)}${sufijoTipo(v)}`;
 const tituloRuta = v => [v.origen_geo, v.destino_geo].filter(x => x).join(" → ") || `${v.origen || ""} → ${v.destino || ""}`;
 
 $("desde-prof").onchange = cargarProf; $("hasta-prof").onchange = cargarProf;
-// Clave para saber si el calculo guardado corresponde a las direcciones actuales
-const claveRuta = () => $("f-origen").value.trim() + "|" + $("f-via").value.trim() + "|" + $("f-destino").value.trim();
+// Los viajes antiguos se consideran Ida y Vuelta.
+const tipoRutaSeleccionado = () => document.querySelector('#f-tipo-ruta input[name="tipo-ruta"]:checked');
+const tipoRutaActual = () => tipoRutaSeleccionado()?.value === "ida" ? "ida" : "ida_vuelta";
+const kmSegunTipo = (c, tipo = tipoRutaActual()) => tipo === "ida" ? c.kmIda : c.kmIV;
+const etiquetaTipoRuta = tipo => tipo === "ida" ? "ida" : "ida y vuelta";
+// Clave para saber si el calculo guardado corresponde a las direcciones y trayecto actuales
+const claveRuta = () => $("f-origen").value.trim() + "|" + $("f-via").value.trim() + "|" + $("f-destino").value.trim() + "|" + tipoRutaActual();
 // Punto intermedio real (si el calculo lo trae) para los enlaces al mapa
 const midDe = b => (b && b.vLat != null && b.vLon != null) ? { lat: b.vLat, lon: b.vLon } : null;
+$("f-tipo-ruta").addEventListener("change", () => {
+  ultimoCalculo = null;
+  $("rutas-opciones").innerHTML = "";
+  $("calc-info").textContent = "Tipo cambiado a " + etiquetaTipoRuta(tipoRutaActual()) + ". Pulsa Calcular km o Guardar viaje para actualizar los kilómetros.";
+});
 $("btn-calc").onclick = async () => {
   $("calc-info").textContent = "Calculando…";
   try {
     ultimoCalculo = await calcularKm($("f-origen").value, $("f-destino").value, $("f-via").value);
     ultimoCalculo._k = claveRuta();
-    $("calc-info").textContent = `Calculado con ${ultimoCalculo.proveedor}: ${ultimoCalculo.kmIda} km ida → ${ultimoCalculo.kmIV} km ida-vuelta (${fmtES(ultimoCalculo.kmIV * precioKm)}). Alternativas: ${ultimoCalculo.alts.join(" / ")} km.`
+    const tipo = tipoRutaActual(), km = kmSegunTipo(ultimoCalculo, tipo);
+    $("calc-info").textContent = `Calculado con ${ultimoCalculo.proveedor}: ${km} km de ${etiquetaTipoRuta(tipo)} (${fmtES(km * precioKm)}). Distancia de ida: ${ultimoCalculo.kmIda} km; ida y vuelta: ${ultimoCalculo.kmIV} km. Alternativas: ${ultimoCalculo.alts.join(" / ")} km.`
       + ` Origen entendido como: ${ultimoCalculo.aGeo} | Destino: ${ultimoCalculo.bGeo}`
       + (ultimoCalculo.locV ? ` | Vía: ${ultimoCalculo.viaGeo}` : "")
       + (ultimoCalculo.dudoso ? " ⚠ Revisa: no se encontró exactamente en la localidad indicada; precisa más (nº, pueblo, provincia)." : "");
@@ -495,7 +539,8 @@ function elegirOpcion(base, i) {
   const o = base.opciones[i];
   ultimoCalculo = { ...base, kmIda: o.kmIda, kmIV: o.kmIV, _k: base._k };
   document.querySelectorAll('#rutas-opciones input[name="ruta"]').forEach((r, j) => r.checked = j === i);
-  $("calc-info").textContent = `Ruta elegida (opción ${i + 1}): ${o.kmIda} km ida → ${o.kmIV} km ida-vuelta (${fmtES(o.kmIV * precioKm)}). Se guardará este valor.`;
+  const tipo = tipoRutaActual(), km = kmSegunTipo(o, tipo);
+  $("calc-info").textContent = `Ruta elegida (opción ${i + 1}): ${km} km de ${etiquetaTipoRuta(tipo)} (${fmtES(km * precioKm)}). Se guardará este valor.`;
   const ver = document.createElement("a");
   ver.href = base.url; ver.target = "_blank"; ver.rel = "noopener";
   ver.textContent = " 🛣️ Previsualizar ruta";
@@ -510,15 +555,17 @@ function renderOpciones(base) {
     box.innerHTML = '<span class="muted">Solo hay una ruta posible entre esos puntos; es la calculada.</span>';
     return;
   }
-  const minKm = Math.min(...ops.map(o => o.kmIV)), minT = Math.min(...ops.map(o => o.min));
+  const tipo = tipoRutaActual();
+  const kmElegida = o => tipo === "ida" ? o.kmIda : o.kmIV;
+  const minKm = Math.min(...ops.map(kmElegida)), minT = Math.min(...ops.map(o => o.min));
   ops.forEach((o, i) => {
     const lab = document.createElement("label"); lab.className = "ruta-op";
     const radio = document.createElement("input");
     radio.type = "radio"; radio.name = "ruta"; radio.checked = i === 0;
     radio.onchange = () => elegirOpcion(base, i);
     const txt = document.createElement("span");
-    const marcas = [i === 0 ? "Recomendada" : null, o.kmIV === minKm ? "Más corta" : null, o.min === minT ? "Más rápida" : null].filter(Boolean).join(" · ");
-    txt.textContent = `Opción ${i + 1}: ${o.kmIda} km ida → ${o.kmIV} km ida-vuelta · ${o.min} min${marcas ? " (" + marcas + ")" : ""} `;
+    const marcas = [i === 0 ? "Recomendada" : null, kmElegida(o) === minKm ? "Más corta" : null, o.min === minT ? "Más rápida" : null].filter(Boolean).join(" · ");
+    txt.textContent = `Opción ${i + 1}: ${kmElegida(o)} km de ${etiquetaTipoRuta(tipo)} · ${o.min} min${marcas ? " (" + marcas + ")" : ""} `;
     const ver = document.createElement("a");
     ver.href = urlOpcion({ lat: base.oLat, lon: base.oLon }, { lat: base.dLat, lon: base.dLon }, o, midDe(base));
     ver.target = "_blank"; ver.rel = "noopener"; ver.title = "Abrir esta opción en el mapa";
@@ -537,11 +584,13 @@ $("btn-elegir").onclick = async () => {
     ultimoCalculo = { ...base };
     if (base.viaInput) {
       box.innerHTML = '<span class="muted">Con parada intermedia hay una única ruta (pasando por la vía indicada); es la calculada.</span>';
-      $("calc-info").textContent = `Calculado con ${base.proveedor} vía ${base.locV}: ${base.kmIV} km ida-vuelta.`;
+      const tipo = tipoRutaActual(), km = kmSegunTipo(base, tipo);
+      $("calc-info").textContent = `Calculado con ${base.proveedor} vía ${base.locV}: ${km} km de ${etiquetaTipoRuta(tipo)}.`;
       return;
     }
     renderOpciones(base);
-    $("calc-info").textContent = `Calculado con ${base.proveedor}: ${base.opciones.length} ruta(s). Elige una abajo; por defecto queda la recomendada (${base.kmIV} km ida-vuelta).`;
+    const tipo = tipoRutaActual(), km = kmSegunTipo(base, tipo);
+    $("calc-info").textContent = `Calculado con ${base.proveedor}: ${base.opciones.length} ruta(s). Elige una abajo; por defecto queda la recomendada (${km} km de ${etiquetaTipoRuta(tipo)}).`;
   } catch (e) { $("calc-info").textContent = "Error: " + e.message; ultimoCalculo = null; }
 };
 $("btn-save").onclick = async () => {
@@ -551,14 +600,14 @@ $("btn-save").onclick = async () => {
   try {
   const origenInput = $("f-origen").value.trim(), viaInput = $("f-via").value.trim(), destinoInput = $("f-destino").value.trim();
   const fecha = $("f-fecha").value, curso = $("f-curso").value.trim(), cod = $("f-cod").value.trim();
-  const obs = $("f-obs").value.trim();
+  const obs = $("f-obs").value.trim(), tipoRuta = tipoRutaActual();
   if (!fecha || !origenInput || !destinoInput || !curso) { alert("Fecha, origen, destino y curso son obligatorios."); return; }
   let km, locO, locV, locD, aGeo, vGeo, bGeo, manual, rutaUrl = "", proveedor = "manual";
   // Viaje que se está editando (para conservar localidades y enlace si no tocó direcciones)
   let viejo = null;
   if (editandoId) {
     if (DEMO) viejo = demoSeed().find(x => String(x.id) === String(editandoId));
-    else viejo = (await sb.from("viajes").select("origen,destino,via,origen_geo,destino_geo,via_geo,ruta_url").eq("id", editandoId).single()).data;
+    else viejo = (await sb.from("viajes").select("origen,destino,via,origen_geo,destino_geo,via_geo,ruta_url,tipo_ruta").eq("id", editandoId).single()).data;
   }
   const sinCambios = (geo, input) => extraerCalle(geo || "", "") === input;
   const direccionesIntactas = viejo && sinCambios(viejo.origen_geo, origenInput)
@@ -583,7 +632,7 @@ $("btn-save").onclick = async () => {
     try {
       const k = claveRuta();
       const c = ultimoCalculo && ultimoCalculo._k === k ? ultimoCalculo : await calcularKm(origenInput, destinoInput, viaInput);
-      km = c.kmIV; locO = c.locO; locD = c.locD; locV = c.locV || ""; rutaUrl = c.url || ""; proveedor = c.proveedor || "";
+      km = kmSegunTipo(c, tipoRuta); locO = c.locO; locD = c.locD; locV = c.locV || ""; rutaUrl = c.url || ""; proveedor = c.proveedor || "";
       // En tabla/PDF solo va la localidad; la calle y nº quedan guardadas como referencia
       aGeo = origenInput + " [" + c.aGeo + "]"; bGeo = destinoInput + " [" + c.bGeo + "]";
       vGeo = viaInput ? viaInput + " [" + (c.viaGeo || "") + "]" : "";
@@ -592,17 +641,24 @@ $("btn-save").onclick = async () => {
   }
   const total = +(km * precioKm).toFixed(2);
   const origen = locO, destino = locD, via = locV || "";
-  const registro = { fecha, origen, via, destino, km, motivo_codigo: cod, motivo_curso: curso, precio_km: precioKm, total, origen_geo: aGeo, via_geo: vGeo, destino_geo: bGeo, manual, observaciones: obs, ruta_url: rutaUrl, proveedor };
+  const registro = { fecha, origen, via, destino, km, motivo_codigo: cod, motivo_curso: curso, precio_km: precioKm, total, origen_geo: aGeo, via_geo: vGeo, destino_geo: bGeo, manual, observaciones: obs, ruta_url: rutaUrl, proveedor, tipo_ruta: tipoRuta };
   // Compatibilidad: si la tabla Supabase aún no tiene las columnas via/via_geo,
   // reintenta sin ellas para no bloquear el guardado (pide ejecutar el schema nuevo).
   const guardarSupabase = async (datos, esEdicion) => {
     const intento = async d => esEdicion
       ? sb.from("viajes").update(d).eq("id", editandoId)
       : sb.from("viajes").insert({ user_id: perfil.id, ...d });
-    let r = await intento(datos);
+    let r = await intento(datos), compatible = datos;
+    if (r.error && /tipo_ruta/i.test(r.error.message || "")) {
+      const { tipo_ruta: _tipo, ...sinTipo } = compatible;
+      compatible = sinTipo;
+      r = await intento(compatible);
+      if (!r.error) alert("Viaje guardado, pero la columna 'tipo_ruta' no existe aún en Supabase: ejecuta el schema.sql nuevo. Se ha usado la opción seleccionada para los km.");
+    }
     if (r.error && /via/i.test(r.error.message || "")) {
-      const { via: _1, via_geo: _2, ...sinVia } = datos;
-      r = await intento(sinVia);
+      const { via: _1, via_geo: _2, ...sinVia } = compatible;
+      compatible = sinVia;
+      r = await intento(compatible);
       if (!r.error) alert("Viaje guardado, pero la columna 'via' no existe aún en Supabase: ejecuta el schema.sql nuevo para ver la parada intermedia.");
     }
     return r.error;
@@ -644,6 +700,8 @@ async function entrarEdicion(id) {
   $("f-curso").value = v.motivo_curso || "";
   $("f-obs").value = v.observaciones || "";
   $("f-km").value = v.manual ? v.km : "";
+  const tipoSeleccionado = tipoRutaSeleccionado();
+  if (tipoSeleccionado) tipoSeleccionado.checked = v.tipo_ruta === "ida";
   ultimoCalculo = null;
   $("calc-info").textContent = v.manual
     ? "Editando con km manual (" + v.km + " km). Cambia el valor o borra el campo para recalcular con el mapa."
@@ -670,6 +728,8 @@ function salirEdicion() {
   ["f-origen", "f-via", "f-destino", "f-cod", "f-curso", "f-km", "f-obs"].forEach(i => $(i).value = "");
   $("f-origen").value = (perfil && perfil.domicilio) || ""; // origen por defecto
   $("f-fecha").valueAsDate = new Date();
+  const tipoSeleccionado = tipoRutaSeleccionado();
+  if (tipoSeleccionado) tipoSeleccionado.checked = true; // Ida y Vuelta por defecto
   ultimoCalculo = null; $("calc-info").textContent = "";
   $("rutas-opciones").innerHTML = "";
   $("btn-save").textContent = "Guardar viaje";
@@ -810,8 +870,16 @@ $("f-tickets").onchange = async ev => {
   ev.target.value = "";
   renderTickets(); cargarProf();
 };
-/* ---------- certificados de asistencia (uno por viaje, con arrastrar/soltar) ---------- */
-const CERTS_KEY = "km_certificados_demo"; // DEMO: [{id,viaje_id,nombre,tipo,dataUrl}]
+/* ---------- certificados de asistencia (uno por curso, con arrastrar/soltar) ---------- */
+const CERTS_KEY = "km_certificados_demo"; // DEMO: [{id,curso_codigo,nombre,tipo,dataUrl}]
+const certDemo = () => { // Migra certificados demo antiguos por viaje al código de su curso.
+  const arr = leerCertsArray();
+  arr.forEach(c => {
+    if (!c.curso_codigo && c.viaje_id) { const v = demoSeed().find(x => String(x.id) === String(c.viaje_id)); if (v) c.curso_codigo = codigoCurso(v).toUpperCase(); }
+    c.user_id = c.user_id || (perfil && perfil.id);
+  });
+  guardarCertsArray(arr); return arr;
+};
 function leerCertsArray() {
   try { const v = JSON.parse(localStorage.getItem(CERTS_KEY) || "null"); return Array.isArray(v) ? v : []; }
   catch { return []; }
@@ -828,31 +896,32 @@ async function dataUrlABlobUrl(dataUrl) {
   const r = await fetch(dataUrl);
   return URL.createObjectURL(await r.blob());
 }
-// Una linea por viaje del periodo con su hueco para anexar el certificado
+// Una línea por código de curso del periodo con su único certificado.
 async function renderCerts(viajes) {
   const turno = ++turnoCert;
-  const box = $("cert-lineas");
-  if (!viajes.length) { box.innerHTML = '<span class="muted">No hay viajes en este periodo.</span>'; return; }
-  const mapa = {};
-  if (DEMO) leerCertsArray().forEach(c => mapa[String(c.viaje_id)] = c);
-  else ((await sb.from("certificados").select("*").in("viaje_id", viajes.map(v => v.id))).data || []).forEach(c => mapa[String(c.viaje_id)] = c);
+  const box = $("cert-lineas"), cursos = cursosUnicos(viajes);
+  if (!cursos.length) { box.innerHTML = '<span class="muted">No hay cursos con código en este periodo.</span>'; return; }
+  const codigos = cursos.map(codigoCurso), mapa = {};
+  if (DEMO) certDemo().forEach(c => mapa[String(c.curso_codigo || "").toUpperCase()] = c);
+  else ((await sb.from("certificados").select("*").in("curso_codigo", codigos.map(c => c.toUpperCase()))).data || []).forEach(c => mapa[String(c.curso_codigo).toUpperCase()] = c);
   if (turno !== turnoCert) return;
   box.innerHTML = "";
-  ordenarComoPdf(viajes).forEach(v => { // mismo orden que el PDF: por fecha juntando cursos
-    const c = mapa[String(v.id)];
+  cursos.forEach(v => {
+    const cod = codigoCurso(v), c = mapa[cod.toUpperCase()];
     const linea = document.createElement("div"); linea.className = "cert-linea";
     const info = document.createElement("span"); info.className = "viaje";
-    info.textContent = `${fmtFecha(v.fecha)} ${textoRutaPDF(v)} · ${(v.motivo_codigo ? v.motivo_codigo + " - " : "") + (v.motivo_curso || "")}`;
+    const numeroViajes = numeroViajesCurso(viajes, cod);
+    info.textContent = `${cod} · ${v.motivo_curso || "Sin nombre"} · ${numeroViajes} viaje(s)`;
     const zona = document.createElement("div"); zona.className = "dropzone" + (c ? " ok" : "");
     zona.textContent = c ? `📜 ${c.nombre}` : "Arrastra imagen/PDF o pulsa aquí";
-    zona.title = c ? c.nombre : "Anexar el certificado de asistencia de este viaje";
+    zona.title = c ? c.nombre : "Anexar el certificado de asistencia de este curso";
     const input = document.createElement("input");
     input.type = "file"; input.accept = "image/*,.pdf,application/pdf"; input.hidden = true;
-    input.onchange = () => { if (input.files[0]) subirCert(v.id, input.files[0]); input.value = ""; };
+    input.onchange = () => { if (input.files[0]) subirCert(cod, input.files[0]); input.value = ""; };
     zona.onclick = () => input.click();
     zona.ondragover = ev => { ev.preventDefault(); zona.classList.add("over"); };
     zona.ondragleave = () => zona.classList.remove("over");
-    zona.ondrop = ev => { ev.preventDefault(); zona.classList.remove("over"); if (ev.dataTransfer.files[0]) subirCert(v.id, ev.dataTransfer.files[0]); };
+    zona.ondrop = ev => { ev.preventDefault(); zona.classList.remove("over"); if (ev.dataTransfer.files[0]) subirCert(cod, ev.dataTransfer.files[0]); };
     linea.append(info, zona, input);
     if (c) {
       const ver = document.createElement("a"); ver.textContent = "Ver"; ver.href = "#"; ver.className = "ver";
@@ -876,18 +945,20 @@ async function renderCerts(viajes) {
     box.appendChild(linea);
   });
 }
-async function subirCert(viajeId, file) {
+async function subirCert(cursoCodigo, file) {
+  const codigo = String(cursoCodigo || "").trim().toUpperCase();
+  if (!codigo) { alert("El curso necesita un código para guardar su certificado."); return; }
   const esPdf = (file.type || "").includes("pdf") || /\.pdf$/i.test(file.name);
   if (DEMO) {
     let dataUrl = null;
     try { dataUrl = esPdf ? await leerFicheroDataUrl(file) : imagenADataUrl(await leerFicheroComoImagen(file)); }
     catch { dataUrl = null; }
     if (!dataUrl) { alert("No se pudo leer " + file.name); return; }
-    const arr = leerCertsArray().filter(c => String(c.viaje_id) !== String(viajeId));
-    arr.push({ id: Date.now() + Math.random(), viaje_id: viajeId, nombre: file.name, tipo: esPdf ? "pdf" : "img", dataUrl });
+    const arr = leerCertsArray().filter(c => String(c.curso_codigo || "").toUpperCase() !== codigo);
+    arr.push({ id: Date.now() + Math.random(), curso_codigo: codigo, nombre: file.name, tipo: esPdf ? "pdf" : "img", dataUrl });
     try { guardarCertsArray(arr); } catch { alert("Documento demasiado grande para la demo (límite del navegador)."); return; }
   } else {
-    const { data: prev } = await sb.from("certificados").select("*").eq("viaje_id", viajeId);
+    const { data: prev } = await sb.from("certificados").select("*").eq("curso_codigo", codigo).eq("user_id", perfil.id);
     for (const p of (prev || [])) { await sb.storage.from("certificados").remove([p.path]); await sb.from("certificados").delete().eq("id", p.id); }
     // Fotos: se suben comprimidas (~200-400 KB) para no llenar el GB gratuito; PDF tal cual
     let blobSubir = file, tipoSubida = file.type || (esPdf ? "application/pdf" : "image/jpeg");
@@ -901,11 +972,12 @@ async function subirCert(viajeId, file) {
     } else if (file.size > 5 * 1024 * 1024) {
       alert("Ese PDF pesa más de 5 MB y ocupa bastante del almacenamiento gratuito. Si puedes, escanéalo a menor resolución.");
     }
-    const path = `${perfil.id}/${viajeId}/${Date.now()}_${nombrePath}`;
+    const carpetaCurso = codigo.replace(/[^A-Z0-9_-]/g, "_");
+    const path = `${perfil.id}/cursos/${carpetaCurso}/${Date.now()}_${nombrePath}`;
     const { error: e1 } = await sb.storage.from("certificados").upload(path, blobSubir, { contentType: tipoSubida });
     if (e1) { alert("Error subiendo: " + e1.message); return; }
-    const { error: e2 } = await sb.from("certificados").insert({ user_id: perfil.id, viaje_id: viajeId, nombre: file.name, path, tipo: esPdf ? "pdf" : "img" });
-    if (e2) { alert("Error registrando: " + e2.message); return; }
+    const { error: e2 } = await sb.from("certificados").insert({ user_id: perfil.id, curso_codigo: codigo, nombre: file.name, path, tipo: esPdf ? "pdf" : "img" });
+    if (e2) { await sb.storage.from("certificados").remove([path]); alert("Error registrando: " + e2.message); return; }
   }
   cargarProf();
 }
@@ -915,13 +987,13 @@ async function quitarCert(c) {
   else { await sb.storage.from("certificados").remove([c.path]); await sb.from("certificados").delete().eq("id", c.id); }
   cargarProf();
 }
-// Certificados de los viajes dados (para el PDF)
-async function listarCerts(viajes) {
-  const ids = (viajes || []).map(v => v.id);
-  if (!ids.length) return [];
-  if (DEMO) return leerCertsArray().filter(c => ids.map(String).includes(String(c.viaje_id)))
+// Certificados de los cursos visibles (para el PDF)
+async function listarCerts(viajes, userId = perfil && perfil.id) {
+  const codigos = [...new Set((viajes || []).map(codigoCurso).filter(Boolean).map(c => c.toUpperCase()))];
+  if (!codigos.length) return [];
+  if (DEMO) return certDemo().filter(c => (!userId || c.user_id === userId) && codigos.includes(String(c.curso_codigo || "").toUpperCase()))
     .map(c => ({ ...c, src: c.dataUrl }));
-  const { data } = await sb.from("certificados").select("*").in("viaje_id", ids);
+  const { data } = await sb.from("certificados").select("*").in("curso_codigo", codigos).eq("user_id", userId);
   const out = [];
   for (const c of (data || [])) {
     const { data: blob } = await sb.storage.from("certificados").download(c.path);
@@ -929,7 +1001,8 @@ async function listarCerts(viajes) {
   }
   return out;
 }
-const faltanCerts = (viajes, certs) => (viajes || []).filter(v => !(certs || []).some(c => String(c.viaje_id) === String(v.id)));
+const faltanCerts = (viajes, certs) => cursosUnicos(viajes).filter(v =>
+  !(certs || []).some(c => String(c.curso_codigo || "").toUpperCase() === codigoCurso(v).toUpperCase()));
 // PDF (escaneado) -> paginas como imagenes para anexarlas
 async function pdfAPaginas(src) {
   const pdf = await window.pdfjsLib.getDocument(src).promise;
@@ -972,9 +1045,13 @@ $("btn-pdf").onclick = async () => {
   if (DEMO) data = demoFiltrarRango(desde, hasta);
   else data = (await sb.from("viajes").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha")).data;
   if (!data?.length) { alert("Sin viajes en ese periodo."); return; }
+  data = viajesVisibles(data);
+  if (!data.length) { alert("No hay viajes operativos en ese periodo."); return; }
+  const kmPeriodo = data.reduce((a, x) => a + (+x.km || 0), 0);
+  if (kmPeriodo > LIMITE_KM_PERIODO && !confirm(`El periodo supera el límite de ${LIMITE_KM_PERIODO} km (${Math.round(kmPeriodo)} km). ¿Generar el PDF igualmente?`)) return;
   const certs = await listarCerts(data);
   const sin = faltanCerts(data, certs);
-  if (sin.length && !confirm(`Hay ${sin.length} viaje(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
+  if (sin.length && !confirm(`Hay ${sin.length} curso(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
   const tickets = await listarTickets(desde, hasta);
   await pdfHoja(perfil, data, { desde, hasta }, { certs, tickets });
 };
@@ -1010,9 +1087,13 @@ $("btn-correo").onclick = async () => {
   if (DEMO) data = demoFiltrarRango(desde, hasta);
   else data = (await sb.from("viajes").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha")).data;
   if (!data?.length) { alert("Sin viajes en ese periodo."); return; }
+  data = viajesVisibles(data);
+  if (!data.length) { alert("No hay viajes operativos en ese periodo."); return; }
+  const kmPeriodo = data.reduce((a, x) => a + (+x.km || 0), 0);
+  if (kmPeriodo > LIMITE_KM_PERIODO && !confirm(`El periodo supera el límite de ${LIMITE_KM_PERIODO} km (${Math.round(kmPeriodo)} km). ¿Generar el PDF igualmente?`)) return;
   const certs = await listarCerts(data);
   const sin = faltanCerts(data, certs);
-  if (sin.length && !confirm(`Hay ${sin.length} viaje(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
+  if (sin.length && !confirm(`Hay ${sin.length} curso(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
   const tickets = await listarTickets(desde, hasta);
   const { nombrePdf, dataUri, tamMB } = await pdfHoja(perfil, data, { desde, hasta }, { certs, tickets }, true);
   if (tamMB > 10 && !confirm(`El PDF pesa ${tamMB.toFixed(1)} MB y puede dar problemas al enviarlo por correo. ¿Generar el .eml igualmente?`)) return;
@@ -1047,7 +1128,7 @@ async function borrarFicheros(certs, tickets) {
 }
 async function archivarRango(viajes, prof, desde, hasta, uid) {
   if (!viajes?.length) { alert("Sin viajes en ese periodo."); return; }
-  const certs = await listarCerts(viajes);
+  const certs = await listarCerts(viajes, uid);
   const tickets = await listarTickets(desde, hasta, uid);
   if (!certs.length && !tickets.length) { alert("No hay ficheros en la nube en este periodo: nada que archivar."); return; }
   await pdfHoja(prof, viajes, { desde, hasta }, { certs, tickets }); // copia local
@@ -1083,7 +1164,7 @@ function exportarCoordExcel() {
     "Código": v.motivo_codigo || "",
     "Curso": v.motivo_curso || "",
     "Observaciones": v.observaciones || "",
-    "Certificado": ultimosCertMap[String(v.id)] ? "Sí" : "No"
+    "Certificado": ultimosCertMap[`${v.user_id}|${codigoCurso(v).toUpperCase()}`] ? "Sí" : "No"
   }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas), "Viajes");
@@ -1286,9 +1367,13 @@ async function initCoord() {
     const uid = p.id;
     const { data: v } = await sb.from("viajes").select("*").eq("user_id", uid).gte("fecha", desde).lte("fecha", hasta).order("fecha");
     if (!v?.length) { alert("Sin viajes en ese periodo."); return; }
-    const certs = await listarCerts(v);
+    v = viajesVisibles(v);
+    if (!v.length) { alert("No hay viajes operativos en ese periodo."); return; }
+    const kmPeriodo = v.reduce((a, x) => a + (+x.km || 0), 0);
+    if (kmPeriodo > LIMITE_KM_PERIODO && !confirm(`El periodo supera el límite de ${LIMITE_KM_PERIODO} km (${Math.round(kmPeriodo)} km). ¿Generar el PDF igualmente?`)) return;
+    const certs = await listarCerts(v, uid);
     const sin = faltanCerts(v, certs);
-    if (sin.length && !confirm(`Hay ${sin.length} viaje(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
+    if (sin.length && !confirm(`Hay ${sin.length} curso(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
     await pdfHoja(p, v, { desde, hasta }, { certs, tickets: await listarTickets(desde, hasta, uid) });
   };
   await cargarCoord();
@@ -1306,7 +1391,7 @@ async function cargarCoord() {
   const { desde, hasta } = rangoCoord(), f = $("filtro-prof").value.trim().toLowerCase();
   let data;
   if (DEMO) {
-    data = demoFiltrarRango(desde, hasta).map(v => ({ ...v, profiles: { nombre: perfil.nombre } }))
+    data = demoFiltrarRango(desde, hasta).map(v => ({ ...v, user_id: perfil.id, profiles: { nombre: perfil.nombre } }))
       .filter(v => !f || v.profiles.nombre.toLowerCase().includes(f));
   } else {
     let q = sb.from("viajes").select("*, profiles!inner(nombre)").gte("fecha", desde).lte("fecha", hasta).order("fecha");
@@ -1314,23 +1399,25 @@ async function cargarCoord() {
     data = (await q).data;
   }
   if ($("f-excluir-prueba").checked) data = (data || []).filter(v => !/prueba/i.test((v.profiles && v.profiles.nombre) || ""));
+  data = viajesVisibles(data);
   const tb = $("t-coord").querySelector("tbody"); tb.innerHTML = "";
   let tot = 0, totKm = 0;
   data = agrupCoord ? ordenarComoPdf(data) : (data || []).sort(compararViajes(ordenCoord.campo, ordenCoord.dir));
   ultimosCoord = data || [];
   const colores = mapaColoresCursos(data);
-  const idsCoord = (data || []).map(v => v.id);
+  const codigosCoord = [...new Set((data || []).map(codigoCurso).filter(Boolean).map(c => c.toUpperCase()))];
   const certMap = {};
-  if (idsCoord.length) {
-    const listaC = DEMO ? leerCertsArray().filter(c => idsCoord.map(String).includes(String(c.viaje_id)))
-      : ((await sb.from("certificados").select("viaje_id,nombre,path,tipo").in("viaje_id", idsCoord)).data || []);
-    listaC.forEach(c => certMap[String(c.viaje_id)] = c);
+  if (codigosCoord.length) {
+    const listaC = DEMO ? certDemo().filter(c => codigosCoord.includes(String(c.curso_codigo || "").toUpperCase()))
+      : ((await sb.from("certificados").select("user_id,curso_codigo,nombre,path,tipo").in("curso_codigo", codigosCoord)).data || []);
+    listaC.forEach(c => certMap[`${c.user_id}|${String(c.curso_codigo).toUpperCase()}`] = c);
   }
   ultimosCertMap = certMap;
   if (turno !== turnoCoord) return; // una carga más reciente tomó el relevo
-  const celdaC = v => certMap[String(v.id)]
-    ? `<td class="st ok"><button class="ibtn sm" data-vercert="${v.id}" title="Ver certificado: ${esc(certMap[String(v.id)].nombre || "")}">📜</button></td>`
-    : `<td class="st no" title="Sin certificado de asistencia">❌</td>`;
+  const certDe = v => certMap[`${v.user_id}|${codigoCurso(v).toUpperCase()}`];
+  const celdaC = v => certDe(v)
+    ? `<td class="st ok"><button class="ibtn sm" data-vercert="${v.user_id}|${codigoCurso(v).toUpperCase()}" title="Ver certificado: ${esc(certDe(v).nombre || "")}">📜</button></td>`
+    : `<td class="st no" title="Sin certificado para el curso ${esc(codigoCurso(v))}">❌</td>`;
   (data || []).forEach(v => {
     tot += +v.total; totKm += +v.km || 0;
     tb.innerHTML += `<tr style="background:${colores[claveCurso(v)]}"><td>${v.fecha.split("-").reverse().join("/")}</td><td>${esc(v.profiles.nombre)}</td>
@@ -1362,10 +1449,11 @@ async function renderResumen(viajes, certMap, turno) {
   const por = {};
   (viajes || []).forEach(v => {
     const n = (v.profiles && v.profiles.nombre) || "?";
-    por[n] = por[n] || { viajes: 0, km: 0, total: 0, sinCert: 0 };
+    por[n] = por[n] || { viajes: 0, km: 0, total: 0, sinCert: 0, cursosSinCert: new Set() };
     por[n].viajes++; por[n].km += +v.km || 0; por[n].total += +v.total || 0;
-    if (!certMap[String(v.id)]) por[n].sinCert++;
+    if (!certMap[`${v.user_id}|${codigoCurso(v).toUpperCase()}`]) por[n].cursosSinCert.add(codigoCurso(v));
   });
+  Object.values(por).forEach(r => { r.sinCert = r.cursosSinCert.size; delete r.cursosSinCert; });
   const filas = Object.entries(por).sort((a, b) => b[1].total - a[1].total);
   if (!filas.length) { box.innerHTML = '<span class="muted">Sin datos en este periodo.</span>'; return; }
   const maxKm = Math.max(...filas.map(([, r]) => r.km));
@@ -1378,7 +1466,7 @@ async function renderResumen(viajes, certMap, turno) {
     <div class="kpis">
       <div class="kpi"><b>${filas.length}</b><span>profesores</span></div>
       <div class="kpi"><b>${totV}</b><span>viajes</span></div>
-      <div class="kpi"><b>${Math.round(totK)} km</b><span>ida-vuelta</span></div>
+      <div class="kpi"><b>${Math.round(totK)} km</b><span>desplazamiento</span></div>
       <div class="kpi"><b>${fmtES(totE)}</b><span>total</span></div>
     </div>
     <div class="charts">
@@ -1445,6 +1533,7 @@ function cargarImagenTicket(src) {
 /* PDF final: hoja de kilometraje (replica del modelo oficial) + certificados + tickets.
    Primera pagina en horizontal; anexos en vertical. */
 async function pdfHoja(prof, viajes, rango, tickets, soloDatos) {
+  viajes = viajesVisibles(viajes);
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
   const W = 841.89, H = 595.28, M = 24;
@@ -1503,7 +1592,7 @@ async function pdfHoja(prof, viajes, rango, tickets, soloDatos) {
     marco(X(2), y1, X(5) - X(2), h2); celdaTxt("Gasolina", X(2), y1 + 9, X(5) - X(2), 8, true, "center");
     for (let ci = 5; ci <= 9; ci++) marco(X(ci), y1, anchos[ci], h2); // Motivo/Poblac./Euros solo en la linea inferior, sin repetir
     const y2 = y1 + h2;
-    ["Fecha", "Desplazamiento ida-vuelta", "Km.", "Euros", "TOTAL", "Motivo", "Poblac.", "Euros", "Poblac.", "Euros"].forEach((t, i) => {
+    ["Fecha", "Desplazamiento", "Km.", "Euros", "TOTAL", "Motivo", "Poblac.", "Euros", "Poblac.", "Euros"].forEach((t, i) => {
       marco(X(i), y2, anchos[i], h3);
       if (t) celdaTxt(t, X(i), y2 + 9, anchos[i], 7.5, true, "center");
     });
@@ -1559,16 +1648,17 @@ async function pdfHoja(prof, viajes, rango, tickets, soloDatos) {
   doc.rect(M, pieY + 8, 340, 54);
   doc.rect(ax, pieY + 8, 340, 54);
   const anexos = tickets && tickets.certs ? tickets : { certs: [], tickets: tickets || [] };
-  // 1) Certificados de asistencia, en el orden de los viajes
-  for (const v of (viajes || [])) {
-    const c = (anexos.certs || []).find(x => String(x.viaje_id) === String(v.id));
+  // 1) Un certificado por código de curso, cada uno una sola vez.
+  for (const v of cursosUnicos(viajes)) {
+    const cod = codigoCurso(v).toUpperCase();
+    const c = (anexos.certs || []).find(x => String(x.curso_codigo || "").toUpperCase() === cod);
     if (!c) continue;
     let paginas = [];
     try { paginas = c.tipo === "pdf" ? await pdfAPaginas(c.src) : [await imagenNormalizada(c.src)]; }
     catch { paginas = []; }
     if (!paginas.length) { doc.addPage("a4", "p"); doc.setFontSize(11); doc.text(e(`No se pudo incluir el certificado: ${c.nombre || ""}`).slice(0, 100), 40, 60); continue; }
     paginas.forEach((pg, p) => paginaAnexo(doc, pg.jpg, pg.w, pg.h,
-      e(`Certificado de asistencia - ${fmtFecha(v.fecha)} ${textoRutaPDF(v)} - ${(v.motivo_codigo ? v.motivo_codigo + " - " : "") + (v.motivo_curso || "")}` + (paginas.length > 1 ? ` (pag. ${p + 1}/${paginas.length})` : "")).slice(0, 110)));
+      e(`Certificado de asistencia - curso ${v.motivo_codigo || cod} ${v.motivo_curso || ""}` + (paginas.length > 1 ? ` (pag. ${p + 1}/${paginas.length})` : "")).slice(0, 110)));
   }
   // 2) Tickets de gasolina, una pagina por ticket
   const listaT = anexos.tickets || [];

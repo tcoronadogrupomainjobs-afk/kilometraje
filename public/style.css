@@ -30,6 +30,15 @@ h3.sec-editando{border-color:var(--warn);background:var(--warn-bg)}
    código 6 dígitos, motivo todo el resto) */
 .grid.linea-curso{grid-template-columns:auto auto 1fr;align-items:end}
 .grid.linea-curso input#f-cod{width:11ch}
+.tipo-ruta-row{padding:10px 12px;background:#f8fbff;border:1px solid var(--line);border-radius:9px}
+.tipo-ruta-label{font-weight:700;font-size:14px}
+.tipo-ruta-opciones{display:flex;gap:8px;flex-wrap:wrap}
+.tipo-ruta-opcion{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border:1px solid #b9c6da;border-radius:999px;background:#fff;cursor:pointer;font-weight:600;transition:.15s}
+.tipo-ruta-opcion:hover{border-color:var(--pri);background:#f4f8ff}
+.tipo-ruta-opcion:has(input:checked){border-color:var(--pri);background:var(--pri-l);box-shadow:0 0 0 1px var(--pri)}
+.tipo-ruta-opcion input{appearance:none;width:18px;height:18px;margin:0;padding:0;border:2px solid #7b8ba2;border-radius:50%;background:#fff;cursor:pointer}
+.tipo-ruta-opcion input:checked{border:5px solid var(--pri)}
+.tipo-ruta-opcion input:focus-visible{outline:2px solid var(--pri);outline-offset:2px}
 .grid.linea-curso .crece input{width:100%}
 label{font-weight:600;font-size:14px;display:flex;flex-direction:column;gap:4px}
 .row label{flex-direction:row;align-items:center}
@@ -65,7 +74,7 @@ th.sortable:hover{background:#1e3a5f}
 #t-prof th:nth-child(6),#t-prof td:nth-child(6){width:18%}
 #t-prof th:nth-child(7),#t-prof td:nth-child(7){width:11%}
 #t-prof th:nth-child(8),#t-prof td:nth-child(8){width:66px}
-#t-prof th:last-child,#t-prof td:last-child{width:102px;text-overflow:clip}
+#t-prof th:last-child,#t-prof td:last-child{width:145px;text-overflow:clip}
 #t-coord th:nth-child(1),#t-coord td:nth-child(1){width:104px}
 #t-coord th:nth-child(2),#t-coord td:nth-child(2){width:13%}
 #t-coord th:nth-child(3),#t-coord td:nth-child(3){width:31%}
@@ -76,7 +85,7 @@ th.sortable:hover{background:#1e3a5f}
 #t-coord th:last-child,#t-coord td:last-child{width:66px}
 /* En pantallas estrechas scroll horizontal en vez de recortar botones */
 .tabla-scroll{overflow-x:auto;margin-top:8px;border:1px solid var(--line);border-radius:10px}
-.tabla-scroll table{margin-top:0;border:none;border-radius:0;min-width:1060px}
+.tabla-scroll table{margin-top:0;border:none;border-radius:0;min-width:1100px}
 td.rec .rec-wrap{display:flex;align-items:center;gap:4px;min-width:0}
 td.rec .rec-txt{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 td.rec.abierto{white-space:normal}
@@ -89,6 +98,10 @@ td.rec.con-mas button.rec-mas{display:block}
 tbody td{border-top:1px solid var(--line)}
 tbody tr:nth-child(even){background:#f5f8fd}
 tbody tr:hover{background:#e7f0fd}
+.viaje-oculto{opacity:.5;filter:grayscale(.65)}
+.viaje-oculto td{font-style:italic}
+.total.limite-superado{background:var(--bad-bg);color:var(--bad);border-color:#efb4b4}
+.total.limite-superado{white-space:normal;text-align:center}
 td.km-manual{color:var(--bad);font-weight:800}
 td.st{text-align:center;font-size:18px;white-space:nowrap}
 tbody td a{font-size:17px}

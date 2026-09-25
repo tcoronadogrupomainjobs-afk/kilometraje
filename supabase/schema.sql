@@ -33,8 +33,26 @@ create table if not exists public.viajes (
   observaciones text default '',
   ruta_url text default '',
   proveedor text default '',
+  tipo_ruta text not null default 'ida_vuelta' check (tipo_ruta in ('ida','ida_vuelta')),
+  oculto boolean not null default false,
   created_at timestamptz default now()
 );
+
+-- Migración segura para bases ya existentes: los viajes anteriores eran ida y vuelta.
+alter table public.viajes add column if not exists tipo_ruta text not null default 'ida_vuelta';
+alter table public.viajes add column if not exists oculto boolean not null default false;
+do $$
+begin
+  if exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.viajes'::regclass
+      and conname = 'viajes_tipo_ruta_check'
+  ) then
+    alter table public.viajes drop constraint viajes_tipo_ruta_check;
+  end if;
+end $$;
+alter table public.viajes add constraint viajes_tipo_ruta_check
+  check (tipo_ruta in ('ida','ida_vuelta'));
 
 -- 3. Ajustes (precio km editable por coordinador)
 create table if not exists public.settings (
@@ -103,11 +121,12 @@ drop policy if exists "settings write coordi" on public.settings;
 create policy "settings write coordi" on public.settings
   for all using (public.soy_coordinador()) with check (public.soy_coordinador());
 
--- 9. Certificados de asistencia (uno por viaje, anexados al PDF tras la tabla)
+-- 9. Certificados de asistencia (uno por curso, anexados al PDF tras la tabla)
 create table if not exists public.certificados (
   id bigint generated always as identity primary key,
   user_id uuid not null references public.profiles(id) on delete cascade,
-  viaje_id bigint not null unique references public.viajes(id) on delete cascade,
+  curso_codigo text not null default '',
+  viaje_id bigint references public.viajes(id) on delete set null, -- compatibilidad; ya no identifica el certificado
   nombre text not null default 'certificado.pdf',
   path text not null,
   tipo text not null default 'img', -- 'img' o 'pdf'
@@ -140,6 +159,22 @@ drop policy if exists "certs own delete" on storage.objects;
 create policy "certs own delete" on storage.objects
   for delete using (bucket_id = 'certificados'
     and (auth.uid()::text = (storage.foldername(name))[1] or public.soy_coordinador()));
+-- Migración de certificados: uno por curso y profesora.
+-- Se conserva el más reciente de cada pareja; los duplicados de base de datos se retiran.
+alter table public.certificados add column if not exists curso_codigo text;
+alter table public.certificados alter column viaje_id drop not null;
+update public.certificados c
+set curso_codigo = upper(regexp_replace(trim(coalesce(v.motivo_codigo, '')), '\s+', '', 'g'))
+from public.viajes v
+where c.viaje_id = v.id and coalesce(c.curso_codigo, '') = '';
+update public.certificados set curso_codigo = 'LEGACY' where coalesce(trim(curso_codigo), '') = '';
+alter table public.certificados alter column curso_codigo set not null;
+delete from public.certificados a using public.certificados b
+where a.user_id = b.user_id and a.curso_codigo = b.curso_codigo
+  and (a.created_at, a.id) < (b.created_at, b.id);
+create unique index if not exists certificados_user_curso_unique
+  on public.certificados(user_id, curso_codigo);
+
 -- 7b. Migracion por si ya ejecutaste el schema anterior:
 alter table public.profiles add column if not exists domicilio text not null default '';alter table public.viajes add column if not exists via text not null default '';
 alter table public.viajes add column if not exists via_geo text default '';
