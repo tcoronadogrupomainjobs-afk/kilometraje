@@ -100,7 +100,46 @@ function casaConLocalidad(display, address, localidad) {
 function elegirCandidato(candidatos, localidad) {
   return candidatos.find(c => casaConLocalidad(c.display, c.address, localidad)) || null;
 }
+// Coordenadas en formato "latitud, longitud" (ej. 42.54663237441167, -6.592219403075277)
+// Tolera: coma, punto y coma, espacios, paréntesis y un punto decimal coma.
+function leerCoordenadas(texto) {
+  let t = String(texto || "").trim();
+  if (!t) return null;
+  t = t.replace(/[()]/g, " ").replace(/;/g, ",").replace(/\s+/g, " ").trim();
+  // Si hay dos números separados por coma (o solo por espacio), se interpretan como coordenadas
+  const m = t.match(/(-?\d+(?:[.,]\d+)?)\s*(?:,|\s)\s*(-?\d+(?:[.,]\d+)?)\s*$/);
+  if (!m) return null;
+  const num = x => Number(String(x).replace(",", "."));
+  const lat = num(m[1]), lon = num(m[2]);
+  if (!isFinite(lat) || !isFinite(lon)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  // Evita confundir un número suelto (p. ej. "2") con un par de coordenadas
+  if (!/[,;\s]/.test(t)) return null;
+  // Si el texto contiene letras, no son coordenadas (es una dirección normal)
+  if (/[a-zA-ZñáéíóúüÁÉÍÓÚÜ]/.test(t)) return null;
+  return { lat, lon };
+}
+// Población de unas coordenadas (geocodificación inversa). Si falla, se deja vacío.
+async function poblacionDeCoordenadas(lat, lon) {
+  try {
+    const u = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&zoom=12&lat=" + lat + "&lon=" + lon;
+    const r = await fetch(u, { headers: { "Accept": "application/json" } });
+    if (!r.ok) return { loc: "", nombre: "" };
+    const d = await r.json();
+    return { loc: localidadDeAddress(d.address || {}), nombre: d.display_name || "" };
+  } catch { return { loc: "", nombre: "" }; }
+}
 async function geocode(dir) {
+  // Si el usuario escribe coordenadas "lat, lon", se usan tal cual y se busca la población.
+  const coord = leerCoordenadas(dir);
+  if (coord) {
+    const rev = await poblacionDeCoordenadas(coord.lat, coord.lon);
+    const nombre = rev.nombre || `${coord.lat}, ${coord.lon}`;
+    return {
+      lat: coord.lat, lon: coord.lon, nombre,
+      loc: rev.loc || "Coordenadas", geoCon: "Coordenadas", dudoso: !rev.loc,
+    };
+  }
   const { calle, localidad, provincia } = partirDireccion(dir);
   const base = { format: "jsonv2", addressdetails: "1", limit: "5", countrycodes: "es" };
   const qOf = p => fetch("https://nominatim.openstreetmap.org/search?" + new URLSearchParams(p), { headers: { "Accept": "application/json" } });
@@ -137,7 +176,7 @@ async function geocode(dir) {
     // 3) Respaldo: Photon (Komoot, datos OSM, sin clave; sin lang: con lang=es devuelve vacio)
     const u = "https://photon.komoot.io/api/?q=" + encodeURIComponent(dir.trim() + (/españa/i.test(dir) ? "" : ", España")) + "&limit=5";
     const r = await fetch(u, { headers: { "Accept": "application/json" } });
-    if (!r.ok) throw new Error("No se encontró: " + dir);
+    if (!r.ok) throw new Error("No se encontró: " + dir + ". Si es una coordenada, usa el formato latitud, longitud (p. ej. 42.54663, -6.59221)");
     const feats = ((await r.json()).features || []).filter(x => (x.properties || {}).countrycode === "ES");
     const lista = feats.map(f => {
       const p = f.properties || {};
@@ -145,7 +184,7 @@ async function geocode(dir) {
     });
     c = elegirCandidato(lista, localidad) || lista[0];
     geoCon = "Photon";
-    if (!c) throw new Error("No se encontró: " + dir);
+    if (!c) throw new Error("No se encontró: " + dir + ". Si es una coordenada, usa el formato latitud, longitud (p. ej. 42.54663, -6.59221)");
     dudoso = !casaConLocalidad(c.display, c.address, localidad);
   }
   const loc = localidadDeAddress(c.address) || extraerLocalidadInput(dir);
@@ -620,8 +659,11 @@ $("btn-save").onclick = async () => {
       // (evita que "Calle X, 2" acabe como localidad "2")
       locO = viejo.origen; locD = viejo.destino; locV = viejo.via || "";
     } else {
-      locO = localidadDeTexto(origenInput); locD = localidadDeTexto(destinoInput);
-      locV = viaInput ? localidadDeTexto(viaInput) : "";
+      // Coordenadas: se busca la población para la tabla y el PDF
+      const co = leerCoordenadas(origenInput), cd = leerCoordenadas(destinoInput), cv = leerCoordenadas(viaInput);
+      const locDeCoord = async (c, texto) => c ? (await poblacionDeCoordenadas(c.lat, c.lon)).loc || "Coordenadas" : localidadDeTexto(texto);
+      locO = await locDeCoord(co, origenInput); locD = await locDeCoord(cd, destinoInput);
+      locV = viaInput ? await locDeCoord(cv, viaInput) : "";
     }
     aGeo = "manual: " + origenInput; bGeo = "manual: " + destinoInput;
     vGeo = viaInput ? "manual: " + viaInput : "";

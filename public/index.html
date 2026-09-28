@@ -72,12 +72,12 @@
       <label class="crece">Motivo / curso <input id="f-curso" placeholder="OLIMPIADAS"></label>
     </div>
     <div class="grid">
-      <label class="span2">🏠 Origen (calle y nº, pueblo) <input id="f-origen" placeholder="Calle Mayor 1, Noviercas"></label>
-      <label class="span2">📍 Punto intermedio (opcional) <input id="f-via" placeholder="Ej. Ágreda — para afinar la ruta"></label>
-      <label class="span2">🏁 Destino (calle y nº, pueblo) <input id="f-destino" placeholder="Calle Real 5, Los Rábanos"></label>
+      <label class="span2">🏠 Origen (calle y nº, pueblo, o coordenadas) <input id="f-origen" placeholder="Calle Mayor 1, Noviercas ó 42.54663, -6.59221"></label>
+      <label class="span2">📍 Punto intermedio (opcional) <input id="f-via" placeholder="Ej. Ágreda — para afinar la ruta (también coordenadas)"></label>
+      <label class="span2">🏁 Destino (calle y nº, pueblo, o coordenadas) <input id="f-destino" placeholder="Calle Real 5, Los Rábanos ó 42.54663, -6.59221"></label>
       <label class="span2">Observaciones (solo tabla, no sale en PDF) <input id="f-obs" placeholder="ej. peaje, desvío por obras"></label>
       <label><span class="lab-row">Km manual (opcional) <span class="nota">Solo si lo autoriza la coordinadora</span></span><input id="f-km" type="number" min="1"></label>
-      <span class="muted ayuda">Si lo dejas vacío, los km se calculan con el mapa (origen → vía → destino).</span>
+      <span class="muted ayuda">Si lo dejas vacío, los km se calculan con el mapa. Puedes escribir direcciones o coordenadas con el formato <code>latitud, longitud</code> (p. ej. <code>42.54663, -6.59221</code>); en ese caso se muestra la población a la que pertenecen.</span>
     </div>
     <div class="row">
       <button id="btn-calc">🔍 Calcular km (autovía primero, si no más corta)</button>
@@ -154,6 +154,6 @@
 <script src="config.js?v=20260919"></script>
 <script src="logo.js?v=20260918"></script>
 <script src="firma.js?v=20260922"></script>
-<script src="app.js?v=20260925f"></script>
+<script src="app.js?v=20260925h"></script>
 </body>
 </html>
