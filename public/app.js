@@ -47,7 +47,7 @@ function estadoLimite(km) {
 }
 const textoTotal = (km, tot) => {
   const e = estadoLimite(km);
-  return `Total: ${fmtES(tot)} (${Math.round(km).toLocaleString("es-ES")} km) · ${e.aviso}`;
+  return `Total: ${Math.round(km).toLocaleString("es-ES")} km (${fmtES(tot)}) · ${e.aviso}`;
 };
 const fmtES = n => n.toFixed(2).replace(".", ",") + " €";
 // Rango de fechas de la hoja (por defecto, mes natural en curso)
