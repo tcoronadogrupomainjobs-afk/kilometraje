@@ -56,6 +56,25 @@ const primerDia = () => hoyISO().slice(0, 7) + "-01";
 const ultimoDia = () => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10); };
 const rangoProf = () => ({ desde: $("desde-prof").value || primerDia(), hasta: $("hasta-prof").value || ultimoDia() });
 const rangoCoord = () => ({ desde: $("desde-coord").value || primerDia(), hasta: $("hasta-coord").value || ultimoDia() });
+// Recuerda el último filtro de fechas usado, para no volver al mes actual al recargar.
+const FILTRO_PROF_KEY = "km_filtro_prof", FILTRO_COORD_KEY = "km_filtro_coord";
+const filtroIsoValido = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ""));
+function leerFiltroGuardado(key) {
+  try {
+    const f = JSON.parse(localStorage.getItem(key) || "null");
+    return f && filtroIsoValido(f.desde) && filtroIsoValido(f.hasta) ? f : null;
+  } catch { return null; }
+}
+function guardarFiltro(key, desde, hasta) {
+  if (!filtroIsoValido(desde) || !filtroIsoValido(hasta)) return;
+  try { localStorage.setItem(key, JSON.stringify({ desde, hasta })); } catch {}
+}
+function aplicarFiltrosGuardados() {
+  const fp = leerFiltroGuardado(FILTRO_PROF_KEY);
+  if (fp) { $("desde-prof").value = fp.desde; $("hasta-prof").value = fp.hasta; }
+  const fc = leerFiltroGuardado(FILTRO_COORD_KEY);
+  if (fc) { $("desde-coord").value = fc.desde; $("hasta-coord").value = fc.hasta; }
+}
 const fmtFecha = iso => String(iso || "").split("-").reverse().join("/");
 
 /* ---------- mapas ---------- */
@@ -300,11 +319,13 @@ function entrarDemo() {
   // En demo se muestran los dos paneles: pruebas como profesora y como coordinadora
   $("v-prof").hidden = false; $("v-coord").hidden = false;
   $("desde-prof").value = primerDia(); $("hasta-prof").value = ultimoDia(); $("f-fecha").valueAsDate = new Date();
+  $("desde-coord").value = primerDia(); $("hasta-coord").value = ultimoDia();
+  aplicarFiltrosGuardados(); // recupera el último periodo usado
   if ($("prof-nombre")) $("prof-nombre").textContent = perfil.nombre;
   cargarDatos();
-  $("desde-coord").value = primerDia(); $("hasta-coord").value = ultimoDia(); $("precio").value = String(precioKm).replace(".", ",");
+  $("precio").value = String(precioKm).replace(".", ",");
   if ($("pdf-user")) $("pdf-user").innerHTML = `<option value="demo">${perfil.nombre}</option>`;
-  $("filtro-prof").onchange = cargarCoord; $("desde-coord").onchange = cargarCoord; $("hasta-coord").onchange = cargarCoord; $("f-excluir-prueba").onchange = cargarCoord;
+  $("filtro-prof").onchange = cargarCoord; $("f-excluir-prueba").onchange = cargarCoord;
   $("btn-exp-coord").onclick = exportarCoordExcel; $("btn-imp-coord").onclick = () => $("f-imp-coord").click();
   $("f-imp-coord").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importarCoordExcel(f); };
   $("btn-precio").onclick = () => { precioKm = parseFloat($("precio").value.replace(",", ".")) || 0.26; localStorage.setItem("km_precio", String(precioKm)); alert("Precio demo: " + precioKm.toFixed(2) + " €/km"); };
@@ -334,7 +355,7 @@ async function arrancar() {
   $("sesion").innerHTML = `${perfil.nombre || user.email} (${perfil.rol}) <button id="out">Salir</button>`;
   $("out").onclick = async () => { await sb.auth.signOut(); location.reload(); };
   if (perfil.rol === "coordinador") { $("v-coord").hidden = false; initCoord(); }
-  else { $("v-prof").hidden = false; $("desde-prof").value = primerDia(); $("hasta-prof").value = ultimoDia(); $("f-fecha").valueAsDate = new Date(); if ($("prof-nombre")) $("prof-nombre").textContent = perfil.nombre || ""; cargarDatos(); cargarProf(); pintarTablon();
+  else { $("v-prof").hidden = false; $("desde-prof").value = primerDia(); $("hasta-prof").value = ultimoDia(); $("f-fecha").valueAsDate = new Date(); aplicarFiltrosGuardados(); if ($("prof-nombre")) $("prof-nombre").textContent = perfil.nombre || ""; cargarDatos(); cargarProf(); pintarTablon();
     try { if (canalTablon) sb.removeChannel(canalTablon); canalTablon = sb.channel("tablon-live").on("postgres_changes", { event: "*", schema: "public", table: "anuncios" }, pintarTablon).subscribe(); } catch {} }
 }
 if (sb) sb.auth.onAuthStateChange((_e, s) => { if (s?.user && !perfil && !DEMO) arrancarUnaVez(); });
@@ -555,7 +576,16 @@ const textoRuta = v => `${cap(v.origen)} → ${cap(v.destino)}${sufijoTipo(v)}`;
 const textoRutaPDF = v => `${cap(v.origen)} - ${cap(v.destino)}${sufijoTipo(v)}`;
 const tituloRuta = v => [v.origen_geo, v.destino_geo].filter(x => x).join(" → ") || `${v.origen || ""} → ${v.destino || ""}`;
 
-$("desde-prof").onchange = cargarProf; $("hasta-prof").onchange = cargarProf;
+// Guarda el periodo cada vez que se cambia una fecha (profesora y coordinadora)
+function conectarMemoriaFiltros() {
+  const prof = () => guardarFiltro(FILTRO_PROF_KEY, $("desde-prof").value, $("hasta-prof").value);
+  const coord = () => guardarFiltro(FILTRO_COORD_KEY, $("desde-coord").value, $("hasta-coord").value);
+  $("desde-prof").addEventListener("change", () => { prof(); cargarProf(); });
+  $("hasta-prof").addEventListener("change", () => { prof(); cargarProf(); });
+  $("desde-coord").addEventListener("change", () => { coord(); cargarCoord(); });
+  $("hasta-coord").addEventListener("change", () => { coord(); cargarCoord(); });
+}
+conectarMemoriaFiltros();
 // Los viajes antiguos se consideran Ida y Vuelta.
 const tipoRutaSeleccionado = () => document.querySelector('#f-tipo-ruta input[name="tipo-ruta"]:checked');
 const tipoRutaActual = () => tipoRutaSeleccionado()?.value === "ida" ? "ida" : "ida_vuelta";
@@ -1401,6 +1431,7 @@ async function profFiltroCoord() {
 }
 async function initCoord() {
   $("desde-coord").value = primerDia(); $("hasta-coord").value = ultimoDia();
+  aplicarFiltrosGuardados();
   const { data: profs } = await sb.from("profiles").select("*").eq("rol", "profesor").order("nombre");
   mapaProfs = Object.fromEntries((profs || []).map(p => [p.nombre, p]));
   $("filtro-prof").innerHTML = `<option value="">Todos</option>` + (profs || []).map(p => `<option value="${esc(p.nombre)}">${esc(p.nombre)}</option>`).join("");
@@ -1409,7 +1440,6 @@ async function initCoord() {
   $("btn-exp-coord").onclick = exportarCoordExcel;
   $("btn-imp-coord").onclick = () => $("f-imp-coord").click();
   $("f-imp-coord").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importarCoordExcel(f); };
-  $("desde-coord").onchange = cargarCoord; $("hasta-coord").onchange = cargarCoord;
   const exP = localStorage.getItem("km_excluir_prueba");
   $("f-excluir-prueba").checked = exP === null ? true : exP === "1";
   $("f-excluir-prueba").onchange = e => { try { localStorage.setItem("km_excluir_prueba", e.target.checked ? "1" : "0"); } catch {} cargarCoord(); };
