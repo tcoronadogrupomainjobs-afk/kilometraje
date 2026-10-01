@@ -298,13 +298,26 @@ async function calcularKm(origen, destino, viaTexto) {
 }
 
 /* ---------- auth ---------- */
-$("btn-login").onclick = async () => {
+// El formulario permite entrar con el botón o pulsando Intro en cualquier campo.
+async function intentarAcceso() {
+  const btn = $("btn-login");
+  if (btn.dataset.busy === "1") return;
   if (DEMO || !sb) { entrarDemo(); return; }
+  btn.dataset.busy = "1"; btn.disabled = true;
   $("login-err").textContent = "";
-  const { error } = await sb.auth.signInWithPassword({ email: $("email").value.trim(), password: $("pass").value });
-  if (error) { $("login-err").textContent = error.message; return; }
-  await arrancarUnaVez();
-};
+  try {
+    const { error } = await sb.auth.signInWithPassword({ email: $("email").value.trim(), password: $("pass").value });
+    if (error) { $("login-err").textContent = error.message; return; }
+    await arrancarUnaVez();
+  } catch (e) {
+    $("login-err").textContent = "No se pudo conectar: " + (e && e.message ? e.message : e);
+  } finally {
+    btn.dataset.busy = ""; btn.disabled = false;
+  }
+}
+$("login-form").addEventListener("submit", e => { e.preventDefault(); intentarAcceso(); });
+$("btn-login").onclick = e => { e.preventDefault(); intentarAcceso(); };
+$("pass").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); intentarAcceso(); } });
 $("btn-salir-demo").onclick = () => { localStorage.removeItem("km_demo"); DEMO = !TIENE_SUPABASE ? true : false; location.reload(); };
 function entrarDemo() {
   DEMO = true;
