@@ -35,8 +35,20 @@ const demoFiltrarRango = (desde, hasta) => demoSeed().filter(v => v.fecha >= des
 let perfil = null, precioKm = 0.26, ultimoCalculo = null, editandoId = null;
 const $ = id => document.getElementById(id);
 const LIMITE_KM_PERIODO = 950;
+const AVISO_KM_PERIODO = 800, ALERTA_KM_PERIODO = 900;
 const viajesVisibles = viajes => (viajes || []).filter(v => !v.oculto);
-const textoTotal = (km, tot, superarLimite = false) => `Total: ${fmtES(tot)} (${Math.round(km).toLocaleString("es-ES")} km)${superarLimite ? " · ⚠ Límite de 950 km superado" : ""}`;
+// Semáforo del límite: verde <800, amarillo 800-899, naranja 900-950, rojo >950.
+function estadoLimite(km) {
+  const n = Math.round(km || 0), faltan = LIMITE_KM_PERIODO - n;
+  if (n > LIMITE_KM_PERIODO) return { nivel: "rojo", faltan: 0, aviso: `⚠ Límite de ${LIMITE_KM_PERIODO} km superado (${n - LIMITE_KM_PERIODO} km de más)` };
+  if (n >= ALERTA_KM_PERIODO) return { nivel: "naranja", faltan, aviso: `⚠ Atención: quedan ${faltan} km para el límite` };
+  if (n >= AVISO_KM_PERIODO) return { nivel: "amarillo", faltan, aviso: `⚠ quedan ${faltan} km para el límite` };
+  return { nivel: "verde", faltan, aviso: `Quedan ${faltan} km para el límite` };
+}
+const textoTotal = (km, tot) => {
+  const e = estadoLimite(km);
+  return `Total: ${fmtES(tot)} (${Math.round(km).toLocaleString("es-ES")} km) · ${e.aviso}`;
+};
 const fmtES = n => n.toFixed(2).replace(".", ",") + " €";
 // Rango de fechas de la hoja (por defecto, mes natural en curso)
 const hoyISO = () => new Date().toISOString().slice(0, 10);
@@ -207,12 +219,12 @@ async function rutaOSRM(a, b, mid) {
   };
   return { kmIda: primera.distance / 1000, alts: d.routes.map(x => Math.round(x.distance / 1000 * 2)), opciones: d.routes.map(op) };
 }
-// Enlace para abrir una opcion concreta en pantalla (via = punto de su trazado;
-// mid = parada intermedia real pedida por el profesor, tiene prioridad)
+// Enlace para abrir una opcion concreta en pantalla.
+// Solo se usa la parada intermedia real indicada por el profesor. Nunca se inyectan
+// puntos internos del trazado de OSRM: eso desviaba la ruta en Google Maps.
 function urlOpcion(a, b, o, mid) {
   if (mid) return `https://www.google.com/maps/dir/?api=1&origin=${a.lat.toFixed(5)},${a.lon.toFixed(5)}&destination=${b.lat.toFixed(5)},${b.lon.toFixed(5)}&waypoints=${mid.lat.toFixed(5)},${mid.lon.toFixed(5)}&travelmode=driving`;
-  if (o && o.via) return `https://www.google.com/maps/dir/?api=1&origin=${a.lat.toFixed(5)},${a.lon.toFixed(5)}&destination=${b.lat.toFixed(5)},${b.lon.toFixed(5)}&waypoints=${o.via[0]},${o.via[1]}&travelmode=driving`;
-  return `https://www.openstreetmap.org/directions?from=${a.lat.toFixed(5)},${a.lon.toFixed(5)}&to=${b.lat.toFixed(5)},${b.lon.toFixed(5)}`;
+  return `https://www.google.com/maps/dir/?api=1&origin=${a.lat.toFixed(5)},${a.lon.toFixed(5)}&destination=${b.lat.toFixed(5)},${b.lon.toFixed(5)}&travelmode=driving`;
 }
 async function rutaValhalla(a, b, mid) {
   // Respaldo: Valhalla (FOSSGIS, sin clave). costing auto = prioriza vias rapidas.
@@ -250,6 +262,8 @@ function extraerLocalidadInput(t) {
 async function calcularKm(origen, destino, viaTexto) {
   const a = await geocode(origen), b = await geocode(destino);
   const viaLimpia = String(viaTexto || "").trim();
+  // Punto intermedio: solo si el campo tiene texto real. Si está vacío, la ruta
+  // va directa de origen a destino, sin desvíos.
   const m = viaLimpia ? await geocode(viaLimpia) : null;
   let ruta, motor;
   try { ruta = await rutaOSRM(a, b, m); motor = "OSRM"; }
@@ -370,9 +384,9 @@ async function cargarProf() {
       ${celdaC(v)}
       <td><button class="ibtn" data-edit="${v.id}" title="Editar">✎</button> <button class="ibtn ${v.oculto ? "on" : ""}" data-toggle="${v.id}" title="${v.oculto ? "Mostrar y operar" : "Ocultar línea"}">${v.oculto ? "🙈" : "👁"}</button> <button class="ibtn danger" data-del="${v.id}" title="Borrar">✕</button></td></tr>`;
   });
-  const superarLimite = totKm > LIMITE_KM_PERIODO;
-  $("total-prof").textContent = textoTotal(totKm, tot, superarLimite);
-  $("total-prof").classList.toggle("limite-superado", superarLimite);
+  const estLimite = estadoLimite(totKm);
+  $("total-prof").textContent = textoTotal(totKm, tot);
+  $("total-prof").className = "total limite-" + estLimite.nivel;
   tb.querySelectorAll("[data-toggle]").forEach(b => b.onclick = async () => {
     const v = (data || []).find(x => String(x.id) === String(b.dataset.toggle));
     if (!v) return;
@@ -384,7 +398,8 @@ async function cargarProf() {
   tb.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => entrarEdicion(b.dataset.edit));
   renderTickets(); // miniaturas del periodo (también al cambiar fechas)
   renderCerts(visibles); // solo los viajes operativos generan certificados y PDF
-  $("total-prof").textContent = textoTotal(totKm, tot, superarLimite);
+  $("total-prof").textContent = textoTotal(totKm, tot);
+  $("total-prof").className = "total limite-" + estLimite.nivel;
   tb.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
     if (!confirm("¿Borrar este viaje? Sus tickets pasan a 'general del periodo'.")) return;
     if (DEMO) {
@@ -562,6 +577,7 @@ $("btn-calc").onclick = async () => {
     ultimoCalculo._k = claveRuta();
     const tipo = tipoRutaActual(), km = kmSegunTipo(ultimoCalculo, tipo);
     $("calc-info").textContent = `Calculado con ${ultimoCalculo.proveedor}: ${km} km de ${etiquetaTipoRuta(tipo)} (${fmtES(km * precioKm)}). Distancia de ida: ${ultimoCalculo.kmIda} km; ida y vuelta: ${ultimoCalculo.kmIV} km. Alternativas: ${ultimoCalculo.alts.join(" / ")} km.`
+      + (ultimoCalculo.viaInput ? ` Ruta con parada intermedia en ${ultimoCalculo.viaInput}.` : " Ruta directa, sin punto intermedio.")
       + ` Origen entendido como: ${ultimoCalculo.aGeo} | Destino: ${ultimoCalculo.bGeo}`
       + (ultimoCalculo.locV ? ` | Vía: ${ultimoCalculo.viaGeo}` : "")
       + (ultimoCalculo.dudoso ? " ⚠ Revisa: no se encontró exactamente en la localidad indicada; precisa más (nº, pueblo, provincia)." : "");
@@ -1466,7 +1482,9 @@ async function cargarCoord() {
       <td title="${esc(tituloRuta(v))}">${esc(textoRuta(v))}${iconoRuta(v)}</td><td${v.manual ? ' class="km-manual" title="Km manual — autorizado por coordinadora"' : ""}>${v.km}</td><td>${fmtES(+v.total)}</td>
       ${celdaRecorte((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}${celdaObs(v)}${celdaC(v)}</tr>`;
   });
+  const estCoord = estadoLimite(totKm), profFiltrado = $("filtro-prof").value;
   $("total-coord").textContent = textoTotal(totKm, tot);
+  $("total-coord").className = "total" + (profFiltrado ? " limite-" + estCoord.nivel : "");
   renderResumen(data || [], certMap, turno);
   tb.querySelectorAll("[data-vercert]").forEach(b => b.onclick = () => verCertCoord(certMap[b.dataset.vercert]));
   marcarRecortes(tb);
@@ -1517,10 +1535,10 @@ async function renderResumen(viajes, certMap, turno) {
       <div class="chartbox"><canvas id="ch-cursos"></canvas></div>
       <div class="chartbox"><canvas id="ch-meses"></canvas></div>
     </div>
-    <table class="dash"><thead><tr><th>Profesor</th><th>Viajes</th><th>Km</th><th>Total</th><th>Sin 📜</th><th></th></tr></thead><tbody>` +
-    filas.map(([n, r]) => `<tr><td>${esc(n)}</td><td>${r.viajes}</td><td>${Math.round(r.km)}</td>` +
+    <table class="dash"><thead><tr><th>Profesor</th><th>Viajes</th><th title="Color según el límite de 950 km: verde, amarillo desde 800, naranja desde 900, rojo al superar">Km</th><th>Total</th><th>Sin 📜</th><th></th></tr></thead><tbody>` +
+    filas.map(([n, r]) => { const e = estadoLimite(r.km); return `<tr><td>${esc(n)}</td><td>${r.viajes}</td><td class="km-limite limite-${e.nivel}" title="${esc(e.aviso)}">${Math.round(r.km)}</td>` +
       `<td>${fmtES(r.total)}</td><td>${r.sinCert ? `<b class="alerta">${r.sinCert}</b>` : "0"}</td>` +
-      `<td class="barcell"><div class="bar" style="width:${maxKm ? Math.round(r.km / maxKm * 100) : 0}%"></div></td></tr>`).join("") +
+      `<td class="barcell"><div class="bar" style="width:${maxKm ? Math.round(r.km / maxKm * 100) : 0}%"></div></td></tr>`; }).join("") +
     `</tbody></table>`;
   pintarChart("ch-km", { type: "bar", data: { labels: nombres, datasets: [{ data: filas.map(([, r]) => Math.round(r.km)), backgroundColor: colores }] }, options: baseChart("Km por profesora") });
   pintarChart("ch-euros", { type: "doughnut", data: { labels: nombres, datasets: [{ data: filas.map(([, r]) => +r.total.toFixed(2)), backgroundColor: colores }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "right" }, title: { display: true, text: "Reparto de €" } } } });
