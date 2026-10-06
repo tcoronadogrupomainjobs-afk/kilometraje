@@ -416,7 +416,7 @@ async function cargarProf() {
       ${celdaRecorte((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}
       ${celdaObs(v)}
       ${celdaC(v)}
-      <td><button class="ibtn" data-edit="${v.id}" title="Editar">✎</button> <button class="ibtn ${v.oculto ? "on" : ""}" data-toggle="${v.id}" title="${v.oculto ? "Mostrar y operar" : "Ocultar línea"}">${v.oculto ? "🙈" : "👁"}</button> <button class="ibtn danger" data-del="${v.id}" title="Borrar">✕</button></td></tr>`;
+      <td><button class="ibtn" data-edit="${v.id}" title="Editar">✎</button> <button class="ibtn ojo${v.oculto ? " tachado" : ""}" data-toggle="${v.id}" title="${v.oculto ? "Mostrar línea" : "Ocultar línea"}">👁</button> <button class="ibtn" data-dup="${v.id}" title="Duplicar en otra fecha">⧉</button> <button class="ibtn danger" data-del="${v.id}" title="Borrar">✕</button></td></tr>`;
   });
   const estLimite = estadoLimite(totKm);
   $("total-prof").textContent = textoTotal(totKm, tot);
@@ -430,6 +430,35 @@ async function cargarProf() {
     cargarProf(); if (!$("v-coord").hidden) cargarCoord();
   });
   tb.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => entrarEdicion(b.dataset.edit));
+  // Duplicar: copia la línea con otra fecha (mismos km, ruta y datos). No copia el estado oculto.
+  tb.querySelectorAll("[data-dup]").forEach(b => b.onclick = async () => {
+    const v = (data || []).find(x => String(x.id) === String(b.dataset.dup));
+    if (!v) return;
+    const sugerida = (v.fecha || "").slice(0, 10).split("-").reverse().join("/");
+    const entrada = prompt(`Duplicar el viaje del curso ${v.motivo_codigo || "(sin código)"} ${v.motivo_curso || ""}.\nFecha del nuevo viaje (DD/MM/AAAA):`, sugerida);
+    if (entrada === null) return; // canceló
+    const m = String(entrada).trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    const d = m ? new Date(+m[3], +m[2] - 1, +m[1]) : null;
+    if (!m || !d || d.getFullYear() !== +m[3] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[1]) { alert("La fecha no es válida. Usa el formato DD/MM/AAAA."); return; }
+    const nueva = `${m[3]}-${m[2]}-${m[1]}`;
+    const { desde, hasta } = rangoProf();
+    if (nueva < desde || nueva > hasta) {
+      if (!confirm(`La fecha ${nueva} está fuera del periodo visible (${desde} – ${hasta}). ¿Crear el viaje igualmente?`)) return;
+    }
+    const mismoDia = (DEMO ? demoSeed() : ((await sb.from("viajes").select("id").eq("motivo_codigo", v.motivo_codigo || "").eq("fecha", nueva)).data || []));
+    if (mismoDia.some(x => String(x.id) !== String(v.id)) && !confirm(`Ya hay un viaje del curso ${v.motivo_codigo || ""} el ${nueva}. ¿Duplicarlo igualmente?`)) return;
+    const { id: _id, created_at: _c, ...copia } = v;
+    const registro = { ...copia, fecha: nueva, total: +(+copia.km * precioKm).toFixed(2), precio_km: precioKm, oculto: false };
+    if (DEMO) {
+      const todos = demoSeed();
+      todos.push({ id: Date.now() + Math.floor(Math.random() * 1e6), user_id: perfil.id, ...registro });
+      demoGuardar(todos);
+    } else {
+      const { error } = await sb.from("viajes").insert({ user_id: perfil.id, ...registro });
+      if (error) { alert(error.message); return; }
+    }
+    cargarProf(); if (!$("v-coord").hidden) cargarCoord();
+  });
   renderTickets(); // miniaturas del periodo (también al cambiar fechas)
   renderCerts(visibles); // solo los viajes operativos generan certificados y PDF
   $("total-prof").textContent = textoTotal(totKm, tot);
@@ -898,6 +927,8 @@ function leerFicheroComoImagen(file) {
     im.onerror = rej; im.src = url;
   });
 }
+// ¿Es un PDF? (por tipo MIME o por extensión; vale para tickets y certificados)
+const esPdfArchivo = file => (file.type || "").includes("pdf") || /\.pdf$/i.test(file.name || "");
 async function listarTickets(desde, hasta, uid) {
   if (DEMO) return ticketsDelRango(desde, hasta).map(t => ({ id: t.id, nombre: t.nombre, viaje_id: t.viaje_id || null, src: t.dataUrl }));
   let q = sb.from("tickets").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha");
@@ -907,7 +938,9 @@ async function listarTickets(desde, hasta, uid) {
   for (const t of (data || [])) {
     const { data: blob } = await sb.storage.from("tickets").download(t.path);
     if (!blob) continue;
-    out.push({ id: t.id, nombre: t.nombre, path: t.path, src: URL.createObjectURL(blob) });
+    // El tipo se deduce del nombre: los PDF antiguos no tienen campo 'tipo' en la tabla
+    const tipo = (t.tipo || ((blob.type || "").includes("pdf") || /\.pdf$/i.test(t.nombre || "") ? "pdf" : "img"));
+    out.push({ id: t.id, nombre: t.nombre, path: t.path, tipo, src: URL.createObjectURL(blob) });
   }
   return out;
 }
@@ -924,14 +957,25 @@ async function renderTickets() {
   const box = $("tickets-prev");
   box.innerHTML = lista.length ? "" : '<span class="muted">Sin tickets en este periodo.</span>';
   lista.forEach(t => {
+    const esPdf = (t.tipo || "").includes("pdf") || /\.pdf$/i.test(t.nombre || "");
     const d = document.createElement("div"); d.className = "thumb";
-    const img = document.createElement("img"); img.src = t.src; img.alt = t.nombre;
+    const ver = document.createElement("button"); ver.type = "button"; ver.className = "ibtn sm ver-ticket";
+    ver.textContent = esPdf ? "Ver PDF" : "Ver imagen";
+    ver.onclick = () => window.open(t.src, "_blank", "noopener");
     const v = t.viaje_id ? porId[String(t.viaje_id)] : null;
     const leyenda = document.createElement("div");
     leyenda.textContent = t.nombre + (v ? ` (${fmtFecha(v.fecha)} ${textoRutaPDF(v)})` : " (general)");
     const btn = document.createElement("button"); btn.textContent = "Quitar"; btn.className = "ibtn danger sm";
     btn.onclick = () => borrarTicket(t);
-    d.append(img, leyenda, btn); box.appendChild(d);
+    // En los PDF no se crea <img>: un src no visualizable dejaría el icono de archivo roto.
+    if (esPdf) {
+      const icono = document.createElement("div"); icono.className = "pdf-icono"; icono.textContent = "📄"; icono.title = t.nombre;
+      d.append(icono, ver, leyenda, btn);
+    } else {
+      const img = document.createElement("img"); img.src = t.src; img.alt = t.nombre;
+      d.append(img, ver, leyenda, btn);
+    }
+    box.appendChild(d);
   });
 }
 async function borrarTicket(t) {
@@ -949,19 +993,30 @@ $("f-tickets").onchange = async ev => {
   const fTicket = hoyISO(); // tickets del periodo visible, sin asignar a viajes
   for (const file of ev.target.files) {
     try {
-      const im = await leerFicheroComoImagen(file);
-      const dataUrl = imagenADataUrl(im);
+      const esPdf = esPdfArchivo(file);
+      // Imágenes: se comprimen. PDF: se sube tal cual para no perder calidad de lectura.
+      let dataUrl = null, tipo = esPdf ? "pdf" : "img";
+      let contenido = file, tipoSubida = file.type || (esPdf ? "application/pdf" : "image/jpeg");
+      let nombrePath = file.name;
+      if (!esPdf) {
+        const im = await leerFicheroComoImagen(file);
+        dataUrl = imagenADataUrl(im);
+        contenido = await (await fetch(dataUrl)).blob();
+        tipoSubida = "image/jpeg";
+        nombrePath = file.name.replace(/\.[a-z0-9]+$/i, "") + ".jpg";
+      } else {
+        if (file.size > 5 * 1024 * 1024) alert("Ese PDF pesa más de 5 MB y ocupa bastante del almacenamiento gratuito. Si puedes, escanéalo a menor resolución.");
+        dataUrl = await leerFicheroDataUrl(file);
+      }
       if (DEMO) {
         const arr = leerTicketsArray();
-        arr.push({ id: Date.now() + Math.random(), nombre: file.name, dataUrl, viaje_id: null, fecha: fTicket });
+        arr.push({ id: Date.now() + Math.random(), nombre: file.name, tipo, dataUrl, viaje_id: null, fecha: fTicket });
         try { guardarTicketsArray(arr); }
         catch { alert("Ticket demasiado grande para la demo (límite del navegador). Se incluye igualmente en este PDF si no recargas."); }
       } else {
-        // Se sube la versión comprimida (~200-400 KB) para no llenar el GB gratuito
-        const blob = await (await fetch(dataUrl)).blob();
-        const nombreJpg = file.name.replace(/\.[a-z0-9]+$/i, "") + ".jpg";
-        const path = `${perfil.id}/${fTicket.slice(0, 7)}/${Date.now()}_${nombreJpg}`;
-        const { error: e1 } = await sb.storage.from("tickets").upload(path, blob, { contentType: "image/jpeg" });
+        // Se sube la versión comprimida (~200-400 KB) o el PDF original para no llenar el GB gratuito
+        const path = `${perfil.id}/${fTicket.slice(0, 7)}/${Date.now()}_${nombrePath}`;
+        const { error: e1 } = await sb.storage.from("tickets").upload(path, contenido, { contentType: tipoSubida });
         if (e1) { alert("Error subiendo " + file.name + ": " + e1.message); continue; }
         const { error: e2 } = await sb.from("tickets").insert({ user_id: perfil.id, mes: fTicket.slice(0, 7), fecha: fTicket, nombre: file.name, path, viaje_id: null });
         if (e2) alert("Error registrando " + file.name + ": " + e2.message);
@@ -1769,10 +1824,13 @@ async function pdfHoja(prof, viajes, rango, tickets, soloDatos) {
     const t = listaT[i];
     const tv = (viajes || []).find(x => String(x.id) === String(t.viaje_id));
     const ref = tv ? `${fmtFecha(tv.fecha)} ${textoRutaPDF(tv)}` : "general del periodo";
+    const esPdf = (t.tipo || "").includes("pdf") || /\.pdf$/i.test(t.nombre || "");
     try {
-      const im = await imagenNormalizada(t.src);
-      paginaAnexo(doc, im.jpg, im.w, im.h,
-        e(`Ticket ${i + 1}/${listaT.length} - ${ref} - ${t.nombre || ""}`).slice(0, 110));
+      const paginas = esPdf ? await pdfAPaginas(t.src) : [await imagenNormalizada(t.src)];
+      if (!paginas.length) throw new Error("vacio");
+      const baseTick = `Ticket ${i + 1}/${listaT.length} - ${ref} - ${t.nombre || ""}`;
+      paginas.forEach((pg, p) => paginaAnexo(doc, pg.jpg, pg.w, pg.h,
+        e(baseTick + (paginas.length > 1 ? ` (pag. ${p + 1}/${paginas.length})` : "")).slice(0, 110)));
     } catch { doc.addPage("a4", "p"); doc.setFontSize(11); doc.text(e(`No se pudo incluir el ticket: ${t.nombre || ""}`).slice(0, 100), 40, 60); }
   }
   const nombrePdf = `HojaKm_${rango.desde}_${rango.hasta}_${prof.nombre || "hoja"}.pdf`;

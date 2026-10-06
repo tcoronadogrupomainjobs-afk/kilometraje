@@ -55,6 +55,9 @@ button.on{background:var(--pri-d);color:#fff;border-color:var(--pri-d)}
 #btn-login{background:var(--pri-d);color:#fff;border:none}
 .ibtn{padding:4px 9px;font-size:16px;border-radius:7px;line-height:1.2}
 .ibtn.danger{background:var(--bad-bg);border-color:#efb4b4;color:var(--bad)}
+/* Ojo tachado: mismo carácter 👁, la línea diagonal se dibuja con CSS */
+.ibtn.ojo{position:relative}
+.ibtn.ojo.tachado::after{content:"";position:absolute;left:12%;right:12%;top:50%;height:2px;background:var(--bad);transform:rotate(-38deg);border-radius:1px}
 .ibtn.sm{font-size:12px}
 a.ver{font-size:13px;font-weight:700;color:var(--pri);text-decoration:none;margin:0 4px}
 table{width:100%;border-collapse:separate;border-spacing:0;font-size:15px;margin-top:8px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
@@ -74,7 +77,7 @@ th.sortable:hover{background:#1e3a5f}
 #t-prof th:nth-child(6),#t-prof td:nth-child(6){width:18%}
 #t-prof th:nth-child(7),#t-prof td:nth-child(7){width:11%}
 #t-prof th:nth-child(8),#t-prof td:nth-child(8){width:66px}
-#t-prof th:last-child,#t-prof td:last-child{width:145px;text-overflow:clip}
+#t-prof th:last-child,#t-prof td:last-child{width:188px;text-overflow:clip}
 #t-coord th:nth-child(1),#t-coord td:nth-child(1){width:104px}
 #t-coord th:nth-child(2),#t-coord td:nth-child(2){width:13%}
 #t-coord th:nth-child(3),#t-coord td:nth-child(3){width:31%}
@@ -85,7 +88,7 @@ th.sortable:hover{background:#1e3a5f}
 #t-coord th:last-child,#t-coord td:last-child{width:66px}
 /* En pantallas estrechas scroll horizontal en vez de recortar botones */
 .tabla-scroll{overflow-x:auto;margin-top:8px;border:1px solid var(--line);border-radius:10px}
-.tabla-scroll table{margin-top:0;border:none;border-radius:0;min-width:1100px}
+.tabla-scroll table{margin-top:0;border:none;border-radius:0;min-width:1150px}
 td.rec .rec-wrap{display:flex;align-items:center;gap:4px;min-width:0}
 td.rec .rec-txt{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 td.rec.abierto{white-space:normal}
@@ -129,6 +132,9 @@ td.km-limite.limite-rojo{color:var(--bad);background:var(--bad-bg)}
 .thumb{border:1px solid var(--line);border-radius:10px;padding:8px;text-align:center;font-size:12px;max-width:160px;background:#fbfdff;box-shadow:0 1px 4px #0f2a4a12}
 .thumb img{max-width:136px;max-height:136px;display:block;margin:0 auto 6px;border-radius:6px}
 .thumb button{margin-top:6px}
+.pdf-icono{font-size:64px;line-height:1;text-align:center;padding:14px 0 6px;user-select:none}
+.ver-ticket{margin-top:6px}
+.ver-ticket:hover{background:var(--pri-l);border-color:var(--pri);filter:none}
 .cert-linea{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-left:6px solid var(--warn);border-radius:10px;padding:8px 12px;margin:8px 0;font-size:14px;background:#fffdf7}
 .cert-linea .viaje{flex:1;font-weight:600}
 .dropzone{border:2px dashed #b9c6da;border-radius:8px;padding:9px 14px;cursor:pointer;font-size:13px;color:var(--mut);min-width:230px;text-align:center;background:#fff;transition:all .15s}
