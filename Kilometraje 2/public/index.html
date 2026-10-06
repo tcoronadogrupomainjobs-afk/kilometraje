@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kilometraje · Profesores</title>
+<link rel="stylesheet" href="style.css?v=20260925t">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+<header><h1>🚗 Hoja de kilometraje</h1><div id="sesion"></div></header>
+<div id="demo-banner" class="banner" hidden>🧪 <b>Modo demo local</b> — sin usuarios, datos en este navegador.
+<button id="btn-salir-demo">Salir de demo</button></div>
+<main>
+  <!-- Login -->
+  <section id="v-login" class="login-card">
+    <div class="login-head">
+      <h2>Acceso</h2>
+      <span class="login-lock" aria-hidden="true"><svg viewBox="0 0 24 24" width="42" height="42"><rect x="5" y="10" width="14" height="10" rx="2" fill="#fff"/><path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke="#fff" stroke-width="2.4"/><circle cx="12" cy="15" r="1.6" fill="#c21435"/></svg></span>
+    </div>
+    <form id="login-form" class="login-body" autocomplete="on">
+      <input id="email" type="email" placeholder="Correo electrónico" autocomplete="username" required>
+      <input id="pass" type="password" placeholder="Contraseña" autocomplete="current-password" required>
+      <button id="btn-login" type="submit">Entrar</button>
+      <p id="login-err" class="error"></p>
+      <p class="login-ayuda">¿Olvidaste la contraseña? Pide al coordinador que te la restablezca.<br>
+      Pulsa <b>Intro</b> para entrar. Las cuentas las crea el coordinador (rol profesor/coordinador en la tabla <code>profiles</code>).</p>
+    </form>
+  </section>
+
+  <!-- Profesor -->
+  <section id="v-prof" class="card" hidden>
+    <div id="tablon-prof"></div>
+    <h2>🧭 Mis desplazamientos</h2>
+    <h3 class="sec sec-viaje">👤 Mis datos</h3>
+    <p class="muted">Tu dirección habitual será el origen por defecto de los viajes nuevos.</p>
+    <div class="row">
+      <label>Dirección habitual <input id="f-domicilio" size="40" placeholder="Calle Mayor 1, Noviercas"></label>
+      <button id="btn-datos" class="primary">Guardar datos</button>
+    </div>
+    <div class="row">
+      <label>Desde <input type="date" id="desde-prof"></label>
+      <label>Hasta <input type="date" id="hasta-prof"></label>
+      <button id="btn-agrup-prof" title="Ordenar como en el PDF: por fecha juntando cada curso">Agrupar por curso</button>
+      <button id="btn-pdf" class="primary">📄 Generar PDF</button>
+      <button id="btn-correo" title="Genera el PDF y un correo de Outlook listo para enviar">✉️ Crear correo</button>
+    </div>
+    <div class="tabla-scroll">
+    <table id="t-prof"><thead><tr>
+      <th id="th-fecha-prof" class="sortable" title="Ordenar por fecha">Fecha</th><th>Desplazamiento</th><th>Km</th>
+      <th>€/km</th><th>Total</th><th id="th-motivo-prof" class="sortable" title="Ordenar por motivo">Motivo</th><th>Observaciones</th><th title="Estado del certificado de su curso">CERT.</th><th></th>
+    </tr></thead><tbody></tbody></table>
+    </div>
+    <div class="row"><span id="total-prof" class="total"></span></div>
+    <h3 id="sec-viaje" class="sec sec-viaje">🚗 Nuevo viaje</h3>
+    <div class="row tipo-ruta-row">
+      <span class="tipo-ruta-label">Tipo de trayecto</span>
+      <div id="f-tipo-ruta" class="tipo-ruta-opciones" role="radiogroup" aria-label="Tipo de trayecto">
+        <label class="tipo-ruta-opcion"><input type="radio" name="tipo-ruta" value="ida"><span>Ida</span></label>
+        <label class="tipo-ruta-opcion"><input type="radio" name="tipo-ruta" value="ida_vuelta" checked><span>Ida y Vuelta</span></label>
+      </div>
+      <span class="muted">Indica si los kilómetros corresponden solo al viaje de ida o al desplazamiento completo.</span>
+    </div>
+    <div class="grid linea-curso">
+      <label>Fecha <input type="date" id="f-fecha"></label>
+      <label>Código curso <input id="f-cod" placeholder="68383" maxlength="8" inputmode="numeric"></label>
+      <label class="crece">Motivo / curso <input id="f-curso" placeholder="OLIMPIADAS"></label>
+    </div>
+    <div class="grid">
+      <label class="span2">🏠 Origen (calle y nº, pueblo, o coordenadas) <input id="f-origen" placeholder="Calle Mayor 1, Noviercas ó 42.54663, -6.59221"></label>
+      <label class="span2">📍 Punto intermedio (opcional) <input id="f-via" placeholder="Ej. Ágreda — para afinar la ruta (también coordenadas)"></label>
+      <label class="span2">🏁 Destino (calle y nº, pueblo, o coordenadas) <input id="f-destino" placeholder="Calle Real 5, Los Rábanos ó 42.54663, -6.59221"></label>
+      <label class="span2">Observaciones (solo tabla, no sale en PDF) <input id="f-obs" placeholder="ej. peaje, desvío por obras"></label>
+      <label><span class="lab-row">Km manual (opcional) <span class="nota">Solo si lo autoriza la coordinadora</span></span><input id="f-km" type="number" min="1"></label>
+      <span class="muted ayuda">Si lo dejas vacío, los km se calculan con el mapa. Puedes escribir direcciones o coordenadas con el formato <code>latitud, longitud</code> (p. ej. <code>42.54663, -6.59221</code>); en ese caso se muestra la población a la que pertenecen.</span>
+    </div>
+    <div class="row">
+      <button id="btn-calc">🔍 Calcular km (autovía primero, si no más corta)</button>
+      <button id="btn-elegir" title="Muestra las rutas posibles para que elijas una">🛣️ Elegir ruta</button>
+      <span id="calc-info" class="muted"></span>
+    </div>
+    <div id="rutas-opciones"></div>
+    <button id="btn-save" class="primary">Guardar viaje</button>
+    <button id="btn-cancel-edit" hidden>Cancelar edición</button>
+    <h3 class="sec sec-cert">📜 Certificados de asistencia</h3>
+    <p class="muted">Una línea por cada curso del periodo, identificada por su código. Arrastra la imagen o PDF del certificado sobre el curso, o pulsa para elegirlo.</p>
+    <div id="cert-lineas"></div>
+    <h3 class="sec sec-tick">⛽ Tickets de gasolina del periodo</h3>
+    <div class="row">
+      <input type="file" id="f-tickets" accept="image/*,.pdf,application/pdf" multiple>
+      <span class="muted">Se anexan al PDF final los visibles en el periodo elegido: una página por ticket o por página si es PDF.</span>
+    </div>
+    <div id="tickets-prev" class="thumbs"></div>
+  </section>
+
+  <!-- Coordinador -->
+  <section id="v-coord" class="card" hidden>
+    <h2>📊 Todos los desplazamientos <span class="live">en directo</span></h2>
+    <div class="row">
+      <label>Desde <input type="date" id="desde-coord"></label>
+      <label>Hasta <input type="date" id="hasta-coord"></label>
+      <label>Profesor <select id="filtro-prof"><option value="">Todos</option></select></label>
+      <button id="btn-agrup-coord" title="Ordenar como en el PDF: por fecha juntando cada curso">Agrupar por curso</button>
+      <label class="derecha" title="Oculta los viajes del profesor de prueba"><input type="checkbox" id="f-excluir-prueba" checked> Excluir profesor de prueba</label>
+    </div>
+    <div class="row">
+      <label>Precio €/km <input id="precio" size="4" value="0.26"></label>
+      <button id="btn-precio">Guardar precio</button>
+      <button id="btn-pdf-coord" class="primary" title="Genera la hoja del profesor elegido en el filtro de arriba">📄 PDF del profesor</button>
+      <button id="btn-archivar-coord" title="Descarga el PDF final del profesor elegido en el filtro como copia y borra de la nube sus certificados y tickets del periodo (los viajes se conservan)">🗄️ Archivar periodo</button>
+      <button id="btn-exp-coord" title="Descarga los viajes visibles en Excel">📥 Exportar Excel</button>
+      <button id="btn-imp-coord" title="Importa viajes desde un Excel (columnas: Fecha, Origen, Destino, Km, Curso)">📤 Importar Excel</button>
+      <input type="file" id="f-imp-coord" accept=".xlsx,.xls,.csv" hidden>
+    </div>
+    <div class="tabla-scroll">
+    <table id="t-coord"><thead><tr>
+      <th id="th-fecha-coord" class="sortable" title="Ordenar por fecha">Fecha</th><th>Profesor</th><th>Desplazamiento</th><th>Km</th><th>Total</th><th id="th-motivo-coord" class="sortable" title="Ordenar por motivo">Motivo</th><th>Observaciones</th><th>CERT.</th>
+    </tr></thead><tbody></tbody></table>
+    </div>
+    <div class="row"><span id="total-coord" class="total"></span></div>
+    <h3 class="sec">📊 Resumen por profesor</h3>
+    <div id="resumen-coord"></div>
+    <h3 class="sec sec-tablon">📢 Tablón de anuncios</h3>
+    <p class="muted">Lo que publiques aquí lo ven los profesores encima de <i>Mis desplazamientos</i>.</p>
+    <div class="toolbar">
+      <button type="button" data-cmd="bold" title="Negrita"><b>B</b></button>
+      <button type="button" data-cmd="italic" title="Cursiva"><i>I</i></button>
+      <button type="button" data-cmd="underline" title="Subrayado"><u>U</u></button>
+      <input type="color" id="tb-color" value="#1f2937" title="Color del texto">
+      <select id="tb-tam" title="Tamaño del texto">
+        <option value="2">Pequeño</option>
+        <option value="3" selected>Normal</option>
+        <option value="5">Grande</option>
+        <option value="6">Muy grande</option>
+      </select>
+      <span class="emojis" title="Pulsar para insertar">
+        <button type="button" data-emoji="📌">📌</button><button type="button" data-emoji="⚠️">⚠️</button><button type="button" data-emoji="🎉">🎉</button><button type="button" data-emoji="🚗">🚗</button><button type="button" data-emoji="💶">💶</button><button type="button" data-emoji="📅">📅</button><button type="button" data-emoji="✅">✅</button><button type="button" data-emoji="❌">❌</button><button type="button" data-emoji="👍">👍</button><button type="button" data-emoji="📢">📢</button>
+      </span>
+    </div>
+    <div id="anuncio-editor" contenteditable="true" placeholder="Escribe el anuncio…"></div>
+    <div class="row">
+      <button id="btn-anuncio-pub" class="primary">Publicar anuncio</button>
+      <button id="btn-anuncio-cancel" hidden>Cancelar edición</button>
+    </div>
+    <div id="anuncios-coord"></div>
+  </section>
+</main>
+<!-- Al cambiar app.js, sube el ?v= para que el navegador no use la version en cache -->
+<script src="config.js?v=20260919"></script>
+<script src="logo.js?v=20260918"></script>
+<script src="firma.js?v=20260922"></script>
+<script src="app.js?v=20260925t"></script>
+</body>
+</html>
