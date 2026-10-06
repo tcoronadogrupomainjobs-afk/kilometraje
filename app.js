@@ -1,0 +1,1846 @@
+/* App Cloudflare Pages + Supabase. Sin servidor propio.
+   Mapas gratuitos: Nominatim (calle y nº -> coords) + OSRM (ruta).
+   PDF en el navegador con jsPDF, replica la HojaKm modelo. */
+const TIENE_SUPABASE = !!(window.SUPABASE_URL && window.SUPABASE_ANON_KEY
+  && !String(window.SUPABASE_URL).includes("TU-PROYECTO")
+  && typeof supabase !== "undefined");
+let sb = TIENE_SUPABASE ? supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY) : null;
+if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+// DEMO local: sin Supabase ni usuarios. Viajes en localStorage, calculo y PDF reales.
+let DEMO = !TIENE_SUPABASE || localStorage.getItem("km_demo") === "1";
+const DEMO_KEY = "km_viajes_demo";
+const demoLeer = () => { try { return JSON.parse(localStorage.getItem(DEMO_KEY) || "null"); } catch { return null; } };
+const demoGuardar = v => localStorage.setItem(DEMO_KEY, JSON.stringify(v));
+function demoSeed() {
+  let v = demoLeer();
+  if (!v) {
+    const ym = hoyISO().slice(0, 7);
+    v = [
+      { id: 1, fecha: ym + "-03", origen: "Noviercas", destino: "Los Rábanos", km: 104, motivo_codigo: "68383", motivo_curso: "OLIMPIADAS", precio_km: 0.26, total: 27.04, ruta_url: "https://www.openstreetmap.org/directions?from=41.71186,-2.03410&to=41.71800,-2.47663", proveedor: "Nominatim+OSRM" },
+      { id: 2, fecha: ym + "-04", origen: "Noviercas", destino: "Velilla de la Sierra", km: 86, motivo_codigo: "68384", motivo_curso: "VIDEOJUEGOS", precio_km: 0.26, total: 22.36, ruta_url: "https://www.openstreetmap.org/directions?from=41.71186,-2.03410&to=41.80921,-2.40144", proveedor: "Nominatim+OSRM" },
+    ];
+    demoGuardar(v);
+  } else {
+    // Migracion suave: viajes de ejemplo antiguos sin enlace de ruta
+    let cambio = false;
+    v.forEach(x => {
+      if (x.id === 1 && !x.ruta_url) { x.ruta_url = "https://www.openstreetmap.org/directions?from=41.71186,-2.03410&to=41.71800,-2.47663"; x.proveedor = "Nominatim+OSRM"; cambio = true; }
+      if (x.id === 2 && !x.ruta_url) { x.ruta_url = "https://www.openstreetmap.org/directions?from=41.71186,-2.03410&to=41.80921,-2.40144"; x.proveedor = "Nominatim+OSRM"; cambio = true; }
+    });
+    if (cambio) demoGuardar(v);
+  }
+  return v;
+}
+const demoFiltrarRango = (desde, hasta) => demoSeed().filter(v => v.fecha >= desde && v.fecha <= hasta).sort((a, b) => a.fecha.localeCompare(b.fecha));
+let perfil = null, precioKm = 0.26, ultimoCalculo = null, editandoId = null;
+const $ = id => document.getElementById(id);
+const LIMITE_KM_PERIODO = 950;
+const AVISO_KM_PERIODO = 800, ALERTA_KM_PERIODO = 900;
+const viajesVisibles = viajes => (viajes || []).filter(v => !v.oculto);
+// Semáforo del límite: verde <800, amarillo 800-899, naranja 900-950, rojo >950.
+function estadoLimite(km) {
+  const n = Math.round(km || 0), faltan = LIMITE_KM_PERIODO - n;
+  if (n > LIMITE_KM_PERIODO) return { nivel: "rojo", faltan: 0, aviso: `⚠ Límite de ${LIMITE_KM_PERIODO} km superado (${n - LIMITE_KM_PERIODO} km de más)` };
+  if (n >= ALERTA_KM_PERIODO) return { nivel: "naranja", faltan, aviso: `⚠ Atención: quedan ${faltan} km para el límite` };
+  if (n >= AVISO_KM_PERIODO) return { nivel: "amarillo", faltan, aviso: `⚠ quedan ${faltan} km para el límite` };
+  return { nivel: "verde", faltan, aviso: `Quedan ${faltan} km para el límite` };
+}
+const textoTotal = (km, tot) => {
+  const e = estadoLimite(km);
+  return `Total: ${Math.round(km).toLocaleString("es-ES")} km (${fmtES(tot)}) · ${e.aviso}`;
+};
+const fmtES = n => n.toFixed(2).replace(".", ",") + " €";
+// Rango de fechas de la hoja (por defecto, mes natural en curso)
+const hoyISO = () => new Date().toISOString().slice(0, 10);
+const primerDia = () => hoyISO().slice(0, 7) + "-01";
+const ultimoDia = () => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10); };
+const rangoProf = () => ({ desde: $("desde-prof").value || primerDia(), hasta: $("hasta-prof").value || ultimoDia() });
+const rangoCoord = () => ({ desde: $("desde-coord").value || primerDia(), hasta: $("hasta-coord").value || ultimoDia() });
+// Recuerda el último filtro de fechas usado, para no volver al mes actual al recargar.
+const FILTRO_PROF_KEY = "km_filtro_prof", FILTRO_COORD_KEY = "km_filtro_coord";
+const filtroIsoValido = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ""));
+function leerFiltroGuardado(key) {
+  try {
+    const f = JSON.parse(localStorage.getItem(key) || "null");
+    return f && filtroIsoValido(f.desde) && filtroIsoValido(f.hasta) ? f : null;
+  } catch { return null; }
+}
+function guardarFiltro(key, desde, hasta) {
+  if (!filtroIsoValido(desde) || !filtroIsoValido(hasta)) return;
+  try { localStorage.setItem(key, JSON.stringify({ desde, hasta })); } catch {}
+}
+function aplicarFiltrosGuardados() {
+  const fp = leerFiltroGuardado(FILTRO_PROF_KEY);
+  if (fp) { $("desde-prof").value = fp.desde; $("hasta-prof").value = fp.hasta; }
+  const fc = leerFiltroGuardado(FILTRO_COORD_KEY);
+  if (fc) { $("desde-coord").value = fc.desde; $("hasta-coord").value = fc.hasta; }
+}
+const fmtFecha = iso => String(iso || "").split("-").reverse().join("/");
+
+/* ---------- mapas ---------- */
+/* ---------- mapas (proveedores gratuitos, sin clave, con respaldo) ----------
+   Geocodifica: Nominatim -> Photon. Ruta: OSRM -> Valhalla.
+   Se usa el primero que responda; se indica cual calculo cada viaje. */
+const PROVINCIAS = ["alava","araba","albacete","alicante","alacant","almeria","asturias","avila","badajoz","baleares","balears","barcelona","burgos","caceres","cadiz","cantabria","castellon","castello","ceuta","ciudad real","cordoba","coruña","a coruña","cuenca","gerona","girona","granada","guadalajara","guipuzcoa","gipuzkoa","huelva","huesca","jaen","leon","lerida","lleida","lugo","madrid","malaga","melilla","murcia","navarra","orense","ourense","palencia","palmas","las palmas","pontevedra","rioja","la rioja","salamanca","tenerife","santa cruz de tenerife","segovia","sevilla","soria","tarragona","teruel","toledo","valencia","valladolid","vizcaya","bizkaia","zamora","zaragoza"];
+const esProvincia = t => PROVINCIAS.includes(norm(t));
+/* "Calle Mayor 1, Geras (León)" -> calle/localidad/provincia.
+   "Ayuntamiento, Geras, León" -> calle "Ayuntamiento", localidad "Geras". */
+function partirDireccion(dir) {
+  const partes = String(dir).split(",").map(s => s.trim()).filter(Boolean);
+  if (partes.length <= 1) {
+    // Una sola palabra: casi siempre es la poblacion ("Valladolid"), no una calle.
+    // (Si lleva numero, probablemente sea calle sin pueblo: se busca como calle.)
+    const t = dir.trim();
+    const m1 = t.match(/^(.*?)\(([^)]+)\)\s*$/);
+    if (m1) return { calle: "", localidad: (m1[1].trim() || t), provincia: m1[2].trim() };
+    if (/\d/.test(t)) return { calle: t, localidad: "", provincia: "" };
+    return { calle: "", localidad: t, provincia: "" };
+  }
+  const tail = partes[partes.length - 1], pre = partes.length > 2 ? partes[partes.length - 2] : "";
+  let localidad = tail, provincia = "";
+  const m = tail.match(/^(.*?)\(([^)]+)\)\s*$/);
+  if (m) {
+    const fuera = m[1].trim(), dentro = m[2].trim();
+    if (esProvincia(dentro)) { provincia = dentro; localidad = fuera || pre; }
+    else if (esProvincia(fuera)) { provincia = fuera; localidad = dentro; }
+    else localidad = fuera || dentro;
+  } else if (pre && esProvincia(tail)) {
+    if (/^\d+\s*[a-zA-Z°ºª]*$/.test(pre)) {
+      // "Calle del Monasterio del Paular, 2, Valladolid": el 2 es el portal
+      // y Valladolid la localidad (no la provincia como tal)
+      provincia = tail; localidad = tail;
+    } else { provincia = tail; localidad = pre; }
+  }
+  const quitar = (provincia && localidad === pre && pre) ? 2 : 1;
+  const calle = partes.slice(0, partes.length - quitar).join(", ");
+  return { calle, localidad, provincia };
+}
+const norm = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+function localidadDeAddress(ad) {
+  ad = ad || {};
+  return ad.village || ad.town || ad.city || ad.municipality || ad.hamlet || ad.suburb || "";
+}
+// ¿El candidato está realmente en la localidad pedida? ("geras" debe aparecer en el resultado)
+function casaConLocalidad(display, address, localidad) {
+  if (!localidad) return true;
+  const palabras = norm(localidad).split(/[^a-z]+/).filter(w => w.length > 2);
+  if (!palabras.length) return true;
+  const hay = norm(display + " " + Object.values(address || {}).join(" "));
+  return palabras.some(w => hay.includes(w));
+}
+function elegirCandidato(candidatos, localidad) {
+  return candidatos.find(c => casaConLocalidad(c.display, c.address, localidad)) || null;
+}
+// Coordenadas en formato "latitud, longitud" (ej. 42.54663237441167, -6.592219403075277)
+// Tolera: coma, punto y coma, espacios, paréntesis y un punto decimal coma.
+function leerCoordenadas(texto) {
+  let t = String(texto || "").trim();
+  if (!t) return null;
+  t = t.replace(/[()]/g, " ").replace(/;/g, ",").replace(/\s+/g, " ").trim();
+  // Si hay dos números separados por coma (o solo por espacio), se interpretan como coordenadas
+  const m = t.match(/(-?\d+(?:[.,]\d+)?)\s*(?:,|\s)\s*(-?\d+(?:[.,]\d+)?)\s*$/);
+  if (!m) return null;
+  const num = x => Number(String(x).replace(",", "."));
+  const lat = num(m[1]), lon = num(m[2]);
+  if (!isFinite(lat) || !isFinite(lon)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  // Evita confundir un número suelto (p. ej. "2") con un par de coordenadas
+  if (!/[,;\s]/.test(t)) return null;
+  // Si el texto contiene letras, no son coordenadas (es una dirección normal)
+  if (/[a-zA-ZñáéíóúüÁÉÍÓÚÜ]/.test(t)) return null;
+  return { lat, lon };
+}
+// Población de unas coordenadas (geocodificación inversa). Si falla, se deja vacío.
+async function poblacionDeCoordenadas(lat, lon) {
+  try {
+    const u = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&zoom=12&lat=" + lat + "&lon=" + lon;
+    const r = await fetch(u, { headers: { "Accept": "application/json" } });
+    if (!r.ok) return { loc: "", nombre: "" };
+    const d = await r.json();
+    return { loc: localidadDeAddress(d.address || {}), nombre: d.display_name || "" };
+  } catch { return { loc: "", nombre: "" }; }
+}
+async function geocode(dir) {
+  // Si el usuario escribe coordenadas "lat, lon", se usan tal cual y se busca la población.
+  const coord = leerCoordenadas(dir);
+  if (coord) {
+    const rev = await poblacionDeCoordenadas(coord.lat, coord.lon);
+    const nombre = rev.nombre || `${coord.lat}, ${coord.lon}`;
+    return {
+      lat: coord.lat, lon: coord.lon, nombre,
+      loc: rev.loc || "Coordenadas", geoCon: "Coordenadas", dudoso: !rev.loc,
+    };
+  }
+  const { calle, localidad, provincia } = partirDireccion(dir);
+  const base = { format: "jsonv2", addressdetails: "1", limit: "5", countrycodes: "es" };
+  const qOf = p => fetch("https://nominatim.openstreetmap.org/search?" + new URLSearchParams(p), { headers: { "Accept": "application/json" } });
+  let cands = [];
+  try {
+    // 1) Estructurada: calle + pueblo (+ provincia) — la mas precisa
+    const p1 = { ...base };
+    if (calle) p1.street = calle;
+    if (localidad) p1.city = localidad;
+    if (provincia) p1.state = provincia;
+    p1.country = "España";
+    const r1 = await qOf(p1);
+    if (r1.ok) cands = (await r1.json()).map(d => ({ display: d.display_name, address: d.address || {}, lat: +d.lat, lon: +d.lon }));
+    // 1b) Solo el pueblo (centro): por si el punto exacto no existe en el mapa
+    // (ej. el ayuntamiento de un pueblo pequeño). Es preferible al pueblo equivocado.
+    if (localidad && !elegirCandidato(cands, localidad)) {
+      const p1b = { ...base };
+      p1b.city = localidad;
+      if (provincia) p1b.state = provincia;
+      p1b.country = "España";
+      const r1b = await qOf(p1b);
+      if (r1b.ok) cands = cands.concat((await r1b.json()).map(d => ({ display: d.display_name, address: d.address || {}, lat: +d.lat, lon: +d.lon })));
+    }
+    // 2) Texto libre como respaldo
+    if (!elegirCandidato(cands, localidad)) {
+      const r2 = await qOf({ ...base, q: dir.trim() + (/españa/i.test(dir) ? "" : ", España") });
+      if (r2.ok) cands = cands.concat((await r2.json()).map(d => ({ display: d.display_name, address: d.address || {}, lat: +d.lat, lon: +d.lon })));
+    }
+  } catch { /* cae al Photon de abajo */ }
+  let c = elegirCandidato(cands, localidad);
+  let geoCon = "Nominatim", dudoso = false;
+  if (!c && cands.length) { c = cands[0]; dudoso = !!localidad; } // nada en la localidad: avisa
+  if (!c) {
+    // 3) Respaldo: Photon (Komoot, datos OSM, sin clave; sin lang: con lang=es devuelve vacio)
+    const u = "https://photon.komoot.io/api/?q=" + encodeURIComponent(dir.trim() + (/españa/i.test(dir) ? "" : ", España")) + "&limit=5";
+    const r = await fetch(u, { headers: { "Accept": "application/json" } });
+    if (!r.ok) throw new Error("No se encontró: " + dir + ". Si es una coordenada, usa el formato latitud, longitud (p. ej. 42.54663, -6.59221)");
+    const feats = ((await r.json()).features || []).filter(x => (x.properties || {}).countrycode === "ES");
+    const lista = feats.map(f => {
+      const p = f.properties || {};
+      return { display: [p.name, p.street, p.city || p.town || p.village || p.county].filter(Boolean).join(", "), address: p, lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0] };
+    });
+    c = elegirCandidato(lista, localidad) || lista[0];
+    geoCon = "Photon";
+    if (!c) throw new Error("No se encontró: " + dir + ". Si es una coordenada, usa el formato latitud, longitud (p. ej. 42.54663, -6.59221)");
+    dudoso = !casaConLocalidad(c.display, c.address, localidad);
+  }
+  const loc = localidadDeAddress(c.address) || extraerLocalidadInput(dir);
+  return { lat: c.lat, lon: c.lon, nombre: c.display, loc, geoCon, dudoso };
+}
+async function rutaOSRM(a, b, mid) {
+  const tramo = mid ? `${a.lon},${a.lat};${mid.lon},${mid.lat};${b.lon},${b.lat}` : `${a.lon},${a.lat};${b.lon},${b.lat}`;
+  const u = `https://router.project-osrm.org/route/v1/driving/${tramo}?overview=full&geometries=geojson&alternatives=${mid ? "false" : "3"}&steps=false`;
+  const r = await fetch(u);
+  if (!r.ok) throw new Error("OSRM " + r.status);
+  const d = await r.json();
+  if (d.code !== "Ok" || !d.routes?.length) throw new Error("OSRM sin ruta");
+  const primera = d.routes[0];
+  const op = r => {
+    // punto intermedio del trazado para previsualizar ESTA opcion en el mapa
+    let via = null;
+    const pts = (r.geometry && r.geometry.coordinates) || [];
+    if (pts.length > 10) { const m = pts[Math.floor(pts.length / 2)]; via = [+m[1].toFixed(5), +m[0].toFixed(5)]; }
+    return { kmIda: +(r.distance / 1000).toFixed(1), kmIV: Math.round(r.distance / 1000 * 2), min: Math.round((r.duration || 0) / 60), via };
+  };
+  return { kmIda: primera.distance / 1000, alts: d.routes.map(x => Math.round(x.distance / 1000 * 2)), opciones: d.routes.map(op) };
+}
+// Enlace para abrir una opcion concreta en pantalla.
+// Solo se usa la parada intermedia real indicada por el profesor. Nunca se inyectan
+// puntos internos del trazado de OSRM: eso desviaba la ruta en Google Maps.
+function urlOpcion(a, b, o, mid) {
+  if (mid) return `https://www.google.com/maps/dir/?api=1&origin=${a.lat.toFixed(5)},${a.lon.toFixed(5)}&destination=${b.lat.toFixed(5)},${b.lon.toFixed(5)}&waypoints=${mid.lat.toFixed(5)},${mid.lon.toFixed(5)}&travelmode=driving`;
+  return `https://www.google.com/maps/dir/?api=1&origin=${a.lat.toFixed(5)},${a.lon.toFixed(5)}&destination=${b.lat.toFixed(5)},${b.lon.toFixed(5)}&travelmode=driving`;
+}
+async function rutaValhalla(a, b, mid) {
+  // Respaldo: Valhalla (FOSSGIS, sin clave). costing auto = prioriza vias rapidas.
+  const locations = mid ? [{ lat: a.lat, lon: a.lon }, { lat: mid.lat, lon: mid.lon }, { lat: b.lat, lon: b.lon }] : [{ lat: a.lat, lon: a.lon }, { lat: b.lat, lon: b.lon }];
+  const r = await fetch("https://valhalla1.openstreetmap.de/route", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ locations, costing: "auto" }),
+  });
+  if (!r.ok) throw new Error("Valhalla " + r.status);
+  const d = await r.json();
+  const km = d?.trip?.summary?.length;
+  if (typeof km !== "number") throw new Error("Valhalla sin ruta");
+  const min = Math.round(((d.trip.summary || {}).time || 0) / 60);
+  return { kmIda: km, alts: [Math.round(km * 2)], opciones: [{ kmIda: +km.toFixed(1), kmIV: Math.round(km * 2), min }] };
+}
+// Localidad para la tabla a partir del texto (km manual): usa el parseo
+// calle/pueblo/provincia y solo como ultimo recurso el texto tras la ultima coma.
+// Un número suelto nunca es localidad válida (ej. el portal de "Calle X, 2").
+const esLocalidadValida = s => !!s && !/^\d+\s*[a-zA-Z°ºª]*$/.test(String(s).trim());
+function localidadDeTexto(input) {
+  const p = partirDireccion(input);
+  const limpio = (p.localidad || "").replace(/\(.*?\)/g, "").trim();
+  if (limpio && !esProvincia(limpio) && esLocalidadValida(limpio)) return limpio;
+  if (p.provincia) return p.provincia;
+  const ultimo = extraerLocalidadInput(input);
+  return esLocalidadValida(ultimo) ? ultimo : String(input).trim();
+}
+// Sin geocodificar (km manual): la localidad es lo que va tras la ultima coma
+// ("Calle Mayor 1, Noviercas" -> "Noviercas"). En tabla y PDF solo sale la localidad.
+function extraerLocalidadInput(t) {
+  const partes = String(t).split(",").map(s => s.trim()).filter(Boolean);
+  let loc = partes.length > 1 ? partes[partes.length - 1] : (partes[0] || t);
+  return loc.replace(/\(.*?\)/g, "").trim() || t.trim();
+}
+async function calcularKm(origen, destino, viaTexto) {
+  const a = await geocode(origen), b = await geocode(destino);
+  const viaLimpia = String(viaTexto || "").trim();
+  // Punto intermedio: solo si el campo tiene texto real. Si está vacío, la ruta
+  // va directa de origen a destino, sin desvíos.
+  const m = viaLimpia ? await geocode(viaLimpia) : null;
+  let ruta, motor;
+  try { ruta = await rutaOSRM(a, b, m); motor = "OSRM"; }
+  catch { ruta = await rutaValhalla(a, b, m); motor = "Valhalla"; }
+  // Criterio: primera ruta propuesta (prioriza autovia); si no hay autovia es la mas corta.
+  // Con parada intermedia el profesor impone el trazado: se calcula pasando por ella.
+  const kmIda = ruta.kmIda;
+  const kmIV = Math.round(kmIda * 2);
+  // Enlace verificable a la ruta calculada (Google Maps con punto del trazado; OSM si no hay)
+  const url = urlOpcion(a, b, (ruta.opciones || [])[0], m);
+  return { kmIda: +kmIda.toFixed(1), kmIV, alts: ruta.alts, opciones: ruta.opciones || [{ kmIda: +kmIda.toFixed(1), kmIV, min: 0 }], oLat: a.lat, oLon: a.lon, dLat: b.lat, dLon: b.lon, aGeo: a.nombre.slice(0, 90), bGeo: b.nombre.slice(0, 90), locO: a.loc, locD: b.loc, url, proveedor: `${a.geoCon}+${motor}`, dudoso: a.dudoso || b.dudoso || (m ? m.dudoso : false),
+    viaInput: viaLimpia, locV: m ? m.loc : "", viaGeo: m ? m.nombre.slice(0, 90) : "", vLat: m ? m.lat : null, vLon: m ? m.lon : null };
+}
+
+/* ---------- auth ---------- */
+// El formulario permite entrar con el botón o pulsando Intro en cualquier campo.
+async function intentarAcceso() {
+  const btn = $("btn-login");
+  if (btn.dataset.busy === "1") return;
+  if (DEMO || !sb) { entrarDemo(); return; }
+  btn.dataset.busy = "1"; btn.disabled = true;
+  $("login-err").textContent = "";
+  try {
+    const { error } = await sb.auth.signInWithPassword({ email: $("email").value.trim(), password: $("pass").value });
+    if (error) { $("login-err").textContent = error.message; return; }
+    await arrancarUnaVez();
+  } catch (e) {
+    $("login-err").textContent = "No se pudo conectar: " + (e && e.message ? e.message : e);
+  } finally {
+    btn.dataset.busy = ""; btn.disabled = false;
+  }
+}
+$("login-form").addEventListener("submit", e => { e.preventDefault(); intentarAcceso(); });
+$("btn-login").onclick = e => { e.preventDefault(); intentarAcceso(); };
+$("pass").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); intentarAcceso(); } });
+$("btn-salir-demo").onclick = () => { localStorage.removeItem("km_demo"); DEMO = !TIENE_SUPABASE ? true : false; location.reload(); };
+function entrarDemo() {
+  DEMO = true;
+  const guardado = (() => { try { return JSON.parse(localStorage.getItem("km_perfil_demo") || "null"); } catch { return null; } })();
+  perfil = { id: "demo", nombre: "ADELA RUIZ LAVILLA", nif: "72896446Q", domicilio: "", categoria: "PROFESOR TITULAR", proyecto: "CYL DIGITAL", rol: "profesor", ...(guardado || {}) };
+  precioKm = parseFloat((localStorage.getItem("km_precio") || "0.26").replace(",", ".")) || 0.26;
+  demoSeed();
+  $("v-login").hidden = true;
+  $("demo-banner").hidden = false;
+  $("sesion").innerHTML = `${perfil.nombre} (demo local) <button id="out">Salir</button>`;
+  $("out").onclick = () => { localStorage.removeItem("km_demo"); location.reload(); };
+  // En demo se muestran los dos paneles: pruebas como profesora y como coordinadora
+  $("v-prof").hidden = false; $("v-coord").hidden = false;
+  $("desde-prof").value = primerDia(); $("hasta-prof").value = ultimoDia(); $("f-fecha").valueAsDate = new Date();
+  $("desde-coord").value = primerDia(); $("hasta-coord").value = ultimoDia();
+  aplicarFiltrosGuardados(); // recupera el último periodo usado
+  if ($("prof-nombre")) $("prof-nombre").textContent = perfil.nombre;
+  cargarDatos();
+  $("precio").value = String(precioKm).replace(".", ",");
+  if ($("pdf-user")) $("pdf-user").innerHTML = `<option value="demo">${perfil.nombre}</option>`;
+  $("filtro-prof").onchange = cargarCoord; $("f-excluir-prueba").onchange = cargarCoord;
+  $("btn-exp-coord").onclick = exportarCoordExcel; $("btn-imp-coord").onclick = () => $("f-imp-coord").click();
+  $("f-imp-coord").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importarCoordExcel(f); };
+  $("btn-precio").onclick = () => { precioKm = parseFloat($("precio").value.replace(",", ".")) || 0.26; localStorage.setItem("km_precio", String(precioKm)); alert("Precio demo: " + precioKm.toFixed(2) + " €/km"); };
+  $("btn-pdf-coord").onclick = async () => {
+    const { desde, hasta } = rangoCoord();
+    const v = viajesVisibles(demoFiltrarRango(desde, hasta));
+    if (!v.length) { alert("No hay viajes operativos en ese periodo."); return; }
+    const kmPeriodo = v.reduce((a, x) => a + (+x.km || 0), 0);
+    if (kmPeriodo > LIMITE_KM_PERIODO && !confirm(`El periodo supera el límite de ${LIMITE_KM_PERIODO} km (${Math.round(kmPeriodo)} km). ¿Generar el PDF igualmente?`)) return;
+    const certs = await listarCerts(v);
+    const sin = faltanCerts(v, certs);
+    if (sin.length && !confirm(`Hay ${sin.length} curso(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
+    await pdfHoja(perfil, v, { desde, hasta }, { certs, tickets: await listarTickets(desde, hasta) });
+  };
+  cargarProf(); cargarCoord(); pintarTablon(); listarAnunciosCoord();
+}
+async function arrancar() {
+  DEMO = false;
+  $("demo-banner").hidden = true;
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) return;
+  const { data } = await sb.from("profiles").select("*").eq("id", user.id).single();
+  perfil = data;
+  const s = await sb.from("settings").select("*").eq("clave", "precio_km").single();
+  if (s.data) precioKm = parseFloat(s.data.valor);
+  $("v-login").hidden = true;
+  $("sesion").innerHTML = `${perfil.nombre || user.email} (${perfil.rol}) <button id="out">Salir</button>`;
+  $("out").onclick = async () => { await sb.auth.signOut(); location.reload(); };
+  if (perfil.rol === "coordinador") { $("v-coord").hidden = false; initCoord(); }
+  else { $("v-prof").hidden = false; $("desde-prof").value = primerDia(); $("hasta-prof").value = ultimoDia(); $("f-fecha").valueAsDate = new Date(); aplicarFiltrosGuardados(); if ($("prof-nombre")) $("prof-nombre").textContent = perfil.nombre || ""; cargarDatos(); cargarProf(); pintarTablon();
+    try { if (canalTablon) sb.removeChannel(canalTablon); canalTablon = sb.channel("tablon-live").on("postgres_changes", { event: "*", schema: "public", table: "anuncios" }, pintarTablon).subscribe(); } catch {} }
+}
+if (sb) sb.auth.onAuthStateChange((_e, s) => { if (s?.user && !perfil && !DEMO) arrancarUnaVez(); });
+// Un solo arranque en vuelo: al recargar, la sesión inicial y la llamada
+// directa competían y pintaban la tabla dos veces
+let arranqueEnCurso = null;
+function arrancarUnaVez() {
+  if (!arranqueEnCurso) arranqueEnCurso = arrancar().finally(() => arranqueEnCurso = null);
+  return arranqueEnCurso;
+}
+
+/* ---------- profesor ---------- */
+// Si dos cargas coinciden (doble arranque al recargar), solo la última pinta
+let turnoProf = 0, turnoCoord = 0, turnoTick = 0, turnoCert = 0;
+async function cargarProf() {
+  const turno = ++turnoProf;
+  const { desde, hasta } = rangoProf();
+  let data;
+  if (DEMO) data = demoFiltrarRango(desde, hasta);
+  else {
+    const r = await sb.from("viajes").select("*")
+      .gte("fecha", desde).lte("fecha", hasta).order("fecha");
+    data = r.data;
+  }
+  const tb = $("t-prof").querySelector("tbody"); tb.innerHTML = "";
+  let tot = 0, totKm = 0;
+  data = agrupProf ? ordenarComoPdf(data) : (data || []).sort(compararViajes(ordenProf.campo, ordenProf.dir));
+  const visibles = viajesVisibles(data);
+  const colores = mapaColoresCursos(data);
+  const codigos = [...new Set(visibles.map(codigoCurso).filter(Boolean))];
+  const certMap = {};
+  if (codigos.length) {
+    const listaC = DEMO ? certDemo().filter(c => codigos.includes(String(c.curso_codigo || "").toUpperCase()))
+      : ((await sb.from("certificados").select("curso_codigo,nombre").in("curso_codigo", codigos.map(c => c.toUpperCase()))).data || []);
+    listaC.forEach(c => certMap[String(c.curso_codigo).toUpperCase()] = c.nombre);
+  }
+  if (turno !== turnoProf) return; // una carga más reciente tomó el relevo
+  const celdaC = v => certMap[codigoCurso(v).toUpperCase()] ? `<td class="st ok" title="Certificado del curso ${esc(codigoCurso(v))}">✅</td>` : `<td class="st no" title="Sin certificado para el curso ${esc(codigoCurso(v))}">❌</td>`;
+  (data || []).forEach(v => {
+    if (!v.oculto) { tot += +v.total; totKm += +v.km || 0; }
+    const claseFila = v.oculto ? ' class="viaje-oculto" title="Línea oculta: no computa en totales ni PDF"' : '';
+    tb.innerHTML += `<tr${claseFila} style="background:${colores[claveCurso(v)]}"><td>${v.fecha.split("-").reverse().join("/")}</td>
+      <td title="${esc(tituloRuta(v))}">${esc(textoRuta(v))}${iconoRuta(v)}</td><td${v.manual ? ' class="km-manual" title="Km manual — autorizado por coordinadora"' : ""}>${v.km}</td>
+      <td>${String(v.precio_km).replace(".", ",")} €</td><td>${fmtES(+v.total)}</td>
+      ${celdaRecorte((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}
+      ${celdaObs(v)}
+      ${celdaC(v)}
+      <td><button class="ibtn" data-edit="${v.id}" title="Editar">✎</button> <button class="ibtn ojo${v.oculto ? " tachado" : ""}" data-toggle="${v.id}" title="${v.oculto ? "Mostrar línea" : "Ocultar línea"}">👁</button> <button class="ibtn" data-dup="${v.id}" title="Duplicar en otra fecha">⧉</button> <button class="ibtn danger" data-del="${v.id}" title="Borrar">✕</button></td></tr>`;
+  });
+  const estLimite = estadoLimite(totKm);
+  $("total-prof").textContent = textoTotal(totKm, tot);
+  $("total-prof").className = "total limite-" + estLimite.nivel;
+  tb.querySelectorAll("[data-toggle]").forEach(b => b.onclick = async () => {
+    const v = (data || []).find(x => String(x.id) === String(b.dataset.toggle));
+    if (!v) return;
+    const nuevo = !v.oculto;
+    if (DEMO) { const todos = demoSeed(); const x = todos.find(y => String(y.id) === String(v.id)); if (x) x.oculto = nuevo; demoGuardar(todos); }
+    else { const { error } = await sb.from("viajes").update({ oculto: nuevo }).eq("id", v.id); if (error) { alert(error.message); return; } }
+    cargarProf(); if (!$("v-coord").hidden) cargarCoord();
+  });
+  tb.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => entrarEdicion(b.dataset.edit));
+  // Duplicar: copia la línea con otra fecha (mismos km, ruta y datos). No copia el estado oculto.
+  tb.querySelectorAll("[data-dup]").forEach(b => b.onclick = async () => {
+    const v = (data || []).find(x => String(x.id) === String(b.dataset.dup));
+    if (!v) return;
+    const sugerida = (v.fecha || "").slice(0, 10).split("-").reverse().join("/");
+    const entrada = prompt(`Duplicar el viaje del curso ${v.motivo_codigo || "(sin código)"} ${v.motivo_curso || ""}.\nFecha del nuevo viaje (DD/MM/AAAA):`, sugerida);
+    if (entrada === null) return; // canceló
+    const m = String(entrada).trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    const d = m ? new Date(+m[3], +m[2] - 1, +m[1]) : null;
+    if (!m || !d || d.getFullYear() !== +m[3] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[1]) { alert("La fecha no es válida. Usa el formato DD/MM/AAAA."); return; }
+    const nueva = `${m[3]}-${m[2]}-${m[1]}`;
+    const { desde, hasta } = rangoProf();
+    if (nueva < desde || nueva > hasta) {
+      if (!confirm(`La fecha ${nueva} está fuera del periodo visible (${desde} – ${hasta}). ¿Crear el viaje igualmente?`)) return;
+    }
+    const mismoDia = (DEMO ? demoSeed() : ((await sb.from("viajes").select("id").eq("motivo_codigo", v.motivo_codigo || "").eq("fecha", nueva)).data || []));
+    if (mismoDia.some(x => String(x.id) !== String(v.id)) && !confirm(`Ya hay un viaje del curso ${v.motivo_codigo || ""} el ${nueva}. ¿Duplicarlo igualmente?`)) return;
+    const { id: _id, created_at: _c, ...copia } = v;
+    const registro = { ...copia, fecha: nueva, total: +(+copia.km * precioKm).toFixed(2), precio_km: precioKm, oculto: false };
+    if (DEMO) {
+      const todos = demoSeed();
+      todos.push({ id: Date.now() + Math.floor(Math.random() * 1e6), user_id: perfil.id, ...registro });
+      demoGuardar(todos);
+    } else {
+      const { error } = await sb.from("viajes").insert({ user_id: perfil.id, ...registro });
+      if (error) { alert(error.message); return; }
+    }
+    cargarProf(); if (!$("v-coord").hidden) cargarCoord();
+  });
+  renderTickets(); // miniaturas del periodo (también al cambiar fechas)
+  renderCerts(visibles); // solo los viajes operativos generan certificados y PDF
+  $("total-prof").textContent = textoTotal(totKm, tot);
+  $("total-prof").className = "total limite-" + estLimite.nivel;
+  tb.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    if (!confirm("¿Borrar este viaje? Sus tickets pasan a 'general del periodo'.")) return;
+    if (DEMO) {
+      demoGuardar(demoSeed().filter(v => String(v.id) !== String(b.dataset.del)));
+      const arr = leerTicketsArray();
+      arr.forEach(t => { if (String(t.viaje_id) === String(b.dataset.del)) t.viaje_id = null; });
+      guardarTicketsArray(arr);
+      // El certificado pertenece al curso, no al viaje: se conserva al borrar uno.
+    } else {
+      await sb.from("tickets").update({ viaje_id: null }).eq("viaje_id", b.dataset.del);
+      // El certificado se conserva porque pertenece al curso, no al viaje.
+      await sb.from("viajes").delete().eq("id", b.dataset.del);
+    }
+    salirEdicion(); cargarProf(); if (!$("v-coord").hidden) cargarCoord();
+  });
+  marcarRecortes(tb);
+}
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+/* Celdas recortadas a una linea (Motivo y Observaciones): boton mas/menos muestra el texto completo */
+function celdaRecorte(t) {
+  t = esc(t || "");
+  if (!t) return `<td class="rec"></td>`;
+  return `<td class="rec" title="${t}"><span class="rec-wrap"><span class="rec-txt">${t}</span><button class="rec-mas" type="button" title="Ver texto completo">${SVG_MAS}</button></span></td>`;
+}
+const SVG_MAS = `<svg viewBox="0 0 28 16" width="24" height="14" aria-hidden="true"><rect x="1.5" y="1.5" width="25" height="13" rx="4" fill="none" stroke="currentColor" stroke-width="2.5"/><circle cx="9" cy="8" r="1.8" fill="currentColor" stroke="none"/><circle cx="14" cy="8" r="1.8" fill="currentColor" stroke="none"/><circle cx="19" cy="8" r="1.8" fill="currentColor" stroke="none"/></svg>`;
+const SVG_MENOS = `<svg viewBox="0 0 28 16" width="24" height="14" aria-hidden="true"><rect x="1.5" y="1.5" width="25" height="13" rx="4" fill="none" stroke="currentColor" stroke-width="2.5"/><line x1="9" y1="8" x2="19" y2="8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>`;
+function celdaObs(v) {
+  return celdaRecorte(v.observaciones);
+}
+document.addEventListener("click", e => {
+  const b = e.target && e.target.closest ? e.target.closest(".rec-mas") : null;
+  if (!b) return;
+  const td = b.closest("td.rec");
+  if (!td) return;
+  const abierto = td.classList.toggle("abierto");
+  b.innerHTML = abierto ? SVG_MENOS : SVG_MAS;
+  b.title = abierto ? "Mostrar menos" : "Ver texto completo";
+  if (!abierto) marcarRecortes(td);
+});
+/* Muestra el boton mas solo donde el texto desborda la columna */
+function marcarRecortes(raiz) {
+  const base = raiz || document;
+  const celdas = Array.from(base.querySelectorAll("td.rec"));
+  if (base.matches && base.matches("td.rec")) celdas.push(base);
+  celdas.forEach(td => {
+    if (td.classList.contains("abierto")) { td.classList.add("con-mas"); return; }
+    const txt = td.querySelector(".rec-txt");
+    if (!txt) return;
+    td.classList.toggle("con-mas", txt.scrollWidth > txt.clientWidth + 1);
+  });
+}
+let tmRecortes = null;
+window.addEventListener("resize", () => {
+  clearTimeout(tmRecortes);
+  tmRecortes = setTimeout(() => marcarRecortes(document), 200);
+});
+/* Orden de las tablas web: clic en Fecha o Motivo (repite para invertir) */
+let ordenProf = { campo: "fecha", dir: 1 };
+let ordenCoord = { campo: "fecha", dir: 1 };
+function compararViajes(campo, dir) {
+  return (a, b) => {
+    let r;
+    if (campo === "motivo")
+      r = String(a.motivo_codigo || "").localeCompare(String(b.motivo_codigo || ""), "es")
+        || String(a.motivo_curso || "").localeCompare(String(b.motivo_curso || ""), "es")
+        || String(a.fecha).localeCompare(String(b.fecha));
+    else r = String(a.fecha).localeCompare(String(b.fecha));
+    return r * dir;
+  };
+}
+function pintarOrden() {
+  const items = [
+    ["th-fecha-prof", "Fecha", agrupProf ? null : ordenProf, "fecha"],
+    ["th-motivo-prof", "Motivo", agrupProf ? null : ordenProf, "motivo"],
+    ["th-fecha-coord", "Fecha", agrupCoord ? null : ordenCoord, "fecha"],
+    ["th-motivo-coord", "Motivo", agrupCoord ? null : ordenCoord, "motivo"],
+  ];
+  items.forEach(([id, etiqueta, est, campo]) => {
+    const el = $(id); if (!el) return;
+    el.innerHTML = etiqueta + (est && est.campo === campo ? (est.dir === 1 ? " ▲" : " ▼") : "");
+  });
+}
+/* Criterio del PDF: por fecha juntando cada curso donde cae su primer viaje */
+const claveCurso = v => `${v.motivo_codigo || ""}|${v.motivo_curso || ""}`;
+// Un curso se identifica exclusivamente por su código, sin espacios ni mayúsculas.
+const codigoCurso = v => String(v && v.motivo_codigo || "").trim().replace(/\s+/g, "").toUpperCase();
+const cursosUnicos = viajes => {
+  const porCodigo = new Map();
+  (viajes || []).forEach(v => {
+    const cod = codigoCurso(v);
+    if (!cod) return;
+    const actual = porCodigo.get(cod);
+    if (!actual || String(v.fecha) < String(actual.fecha)) porCodigo.set(cod, v);
+  });
+  return [...porCodigo.values()].sort((a, b) => {
+    const ca = codigoCurso(a), cb = codigoCurso(b);
+    return ca.localeCompare(cb, "es", { numeric: true });
+  });
+};
+// Número de filas realmente visibles en "Mis desplazamientos" para un curso.
+const numeroViajesCurso = (viajes, codigo) =>
+  (viajes || []).filter(v => codigoCurso(v) === String(codigo || "").trim().replace(/\s+/g, "").toUpperCase()).length;
+function ordenarComoPdf(viajes) {
+  const primera = {};
+  (viajes || []).forEach(v => { const k = claveCurso(v); if (!primera[k] || String(v.fecha) < primera[k]) primera[k] = String(v.fecha); });
+  return [...(viajes || [])].sort((a, b) =>
+    String(primera[claveCurso(a)]).localeCompare(String(primera[claveCurso(b)])) ||
+    String(a.fecha).localeCompare(String(b.fecha)));
+}
+// Mismo color por curso que en el PDF (pasteles RGB -> CSS)
+const BANDAS_CSS = ["#dfeffb", "#e4dff1", "#f1dde6", "#fdecd5", "#e0efdc", "#fff5d0", "#e0efef", "#f0e4f0"];
+function mapaColoresCursos(viajes) {
+  const primera = {};
+  (viajes || []).forEach(v => { const k = claveCurso(v); if (!primera[k] || String(v.fecha) < primera[k]) primera[k] = String(v.fecha); });
+  const claves = [...new Set((viajes || []).map(claveCurso))].sort((a, b) => String(primera[a]).localeCompare(String(primera[b])));
+  const mapa = {};
+  claves.forEach((k, i) => mapa[k] = BANDAS_CSS[i % BANDAS_CSS.length]);
+  return mapa;
+}
+let agrupProf = false, agrupCoord = false;
+function syncAgrup() {
+  $("btn-agrup-prof").classList.toggle("on", agrupProf);
+  $("btn-agrup-coord").classList.toggle("on", agrupCoord);
+  pintarOrden();
+}
+function alternarOrden(est, campo, recargar) {
+  if (est.campo === campo) est.dir *= -1; else { est.campo = campo; est.dir = 1; }
+  pintarOrden(); recargar();
+}
+$("th-fecha-prof").onclick = () => { agrupProf = false; syncAgrup(); alternarOrden(ordenProf, "fecha", cargarProf); };
+$("th-motivo-prof").onclick = () => { agrupProf = false; syncAgrup(); alternarOrden(ordenProf, "motivo", cargarProf); };
+$("th-fecha-coord").onclick = () => { agrupCoord = false; syncAgrup(); alternarOrden(ordenCoord, "fecha", cargarCoord); };
+$("th-motivo-coord").onclick = () => { agrupCoord = false; syncAgrup(); alternarOrden(ordenCoord, "motivo", cargarCoord); };
+$("btn-agrup-prof").onclick = () => { agrupProf = !agrupProf; syncAgrup(); cargarProf(); };
+$("btn-agrup-coord").onclick = () => { agrupCoord = !agrupCoord; syncAgrup(); cargarCoord(); };
+pintarOrden();
+// Poblaciones con primera letra en mayuscula ("Velilla de la Sierra"),
+// respetando preposiciones/articulos en minuscula. El PDF sigue en mayusculas como el modelo.
+const MINUS = ["de", "del", "la", "las", "el", "los", "y", "e", "en", "al", "a", "o", "u", "por", "con", "sin", "sobre", "tras", "ante", "bajo", "entre", "hacia", "hasta", "para", "segun", "durante"];
+const cap = s => String(s ?? "").toLowerCase().split(/(\s+|[-–—'])/).map((w, i) => {
+  if (!w || /^\s+$/.test(w) || /^[-–—']$/.test(w)) return w;
+  if (i > 0 && MINUS.includes(w)) return w;
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}).join("");
+// Enlace a la ruta calculada (OpenStreetMap) para verificarla
+const iconoRuta = v => v.ruta_url ? ` <a href="${esc(v.ruta_url)}" target="_blank" rel="noopener" title="Ver ruta calculada en el mapa${v.proveedor && v.proveedor !== "manual" ? " (" + esc(v.proveedor) + ")" : ""}">🛣️</a>` : "";
+// En las tablas web solo se muestra Origen → Destino (el punto intermedio
+// no aparece, aunque sí cuenta en los km, el enlace de ruta y el PDF)
+const sufijoTipo = v => v.tipo_ruta === "ida" ? " · Ida" : " · Ida y vuelta";
+const textoRuta = v => `${cap(v.origen)} → ${cap(v.destino)}${sufijoTipo(v)}`;
+// El punto intermedio no se muestra: solo Origen - Destino (sí cuenta en los km,
+// el enlace de ruta y los datos guardados)
+const textoRutaPDF = v => `${cap(v.origen)} - ${cap(v.destino)}${sufijoTipo(v)}`;
+const tituloRuta = v => [v.origen_geo, v.destino_geo].filter(x => x).join(" → ") || `${v.origen || ""} → ${v.destino || ""}`;
+
+// Guarda el periodo cada vez que se cambia una fecha (profesora y coordinadora)
+function conectarMemoriaFiltros() {
+  const prof = () => guardarFiltro(FILTRO_PROF_KEY, $("desde-prof").value, $("hasta-prof").value);
+  const coord = () => guardarFiltro(FILTRO_COORD_KEY, $("desde-coord").value, $("hasta-coord").value);
+  $("desde-prof").addEventListener("change", () => { prof(); cargarProf(); });
+  $("hasta-prof").addEventListener("change", () => { prof(); cargarProf(); });
+  $("desde-coord").addEventListener("change", () => { coord(); cargarCoord(); });
+  $("hasta-coord").addEventListener("change", () => { coord(); cargarCoord(); });
+}
+conectarMemoriaFiltros();
+// Los viajes antiguos se consideran Ida y Vuelta.
+const tipoRutaSeleccionado = () => document.querySelector('#f-tipo-ruta input[name="tipo-ruta"]:checked');
+const tipoRutaActual = () => tipoRutaSeleccionado()?.value === "ida" ? "ida" : "ida_vuelta";
+const kmSegunTipo = (c, tipo = tipoRutaActual()) => tipo === "ida" ? c.kmIda : c.kmIV;
+const etiquetaTipoRuta = tipo => tipo === "ida" ? "ida" : "ida y vuelta";
+// Clave para saber si el calculo guardado corresponde a las direcciones y trayecto actuales
+const claveRuta = () => $("f-origen").value.trim() + "|" + $("f-via").value.trim() + "|" + $("f-destino").value.trim() + "|" + tipoRutaActual();
+// Punto intermedio real (si el calculo lo trae) para los enlaces al mapa
+const midDe = b => (b && b.vLat != null && b.vLon != null) ? { lat: b.vLat, lon: b.vLon } : null;
+$("f-tipo-ruta").addEventListener("change", () => {
+  ultimoCalculo = null;
+  $("rutas-opciones").innerHTML = "";
+  $("calc-info").textContent = "Tipo cambiado a " + etiquetaTipoRuta(tipoRutaActual()) + ". Pulsa Calcular km o Guardar viaje para actualizar los kilómetros.";
+});
+$("btn-calc").onclick = async () => {
+  $("calc-info").textContent = "Calculando…";
+  try {
+    ultimoCalculo = await calcularKm($("f-origen").value, $("f-destino").value, $("f-via").value);
+    ultimoCalculo._k = claveRuta();
+    const tipo = tipoRutaActual(), km = kmSegunTipo(ultimoCalculo, tipo);
+    $("calc-info").textContent = `Calculado con ${ultimoCalculo.proveedor}: ${km} km de ${etiquetaTipoRuta(tipo)} (${fmtES(km * precioKm)}). Distancia de ida: ${ultimoCalculo.kmIda} km; ida y vuelta: ${ultimoCalculo.kmIV} km. Alternativas: ${ultimoCalculo.alts.join(" / ")} km.`
+      + (ultimoCalculo.viaInput ? ` Ruta con parada intermedia en ${ultimoCalculo.viaInput}.` : " Ruta directa, sin punto intermedio.")
+      + ` Origen entendido como: ${ultimoCalculo.aGeo} | Destino: ${ultimoCalculo.bGeo}`
+      + (ultimoCalculo.locV ? ` | Vía: ${ultimoCalculo.viaGeo}` : "")
+      + (ultimoCalculo.dudoso ? " ⚠ Revisa: no se encontró exactamente en la localidad indicada; precisa más (nº, pueblo, provincia)." : "");
+    const ver = document.createElement("a"); // previsualizar la ruta antes de guardar
+    ver.href = ultimoCalculo.url; ver.target = "_blank"; ver.rel = "noopener";
+    ver.textContent = " 🛣️ Previsualizar ruta";
+    $("calc-info").appendChild(document.createTextNode(" "));
+    $("calc-info").appendChild(ver);
+  } catch (e) { $("calc-info").textContent = "Error: " + e.message; ultimoCalculo = null; }
+};
+/* Elegir ruta: muestra las alternativas del mapa para que el profesor escoja.
+   No toca el calculo automatico; al elegir, ese valor es el que se guarda. */
+function elegirOpcion(base, i) {
+  const o = base.opciones[i];
+  ultimoCalculo = { ...base, kmIda: o.kmIda, kmIV: o.kmIV, _k: base._k };
+  document.querySelectorAll('#rutas-opciones input[name="ruta"]').forEach((r, j) => r.checked = j === i);
+  const tipo = tipoRutaActual(), km = kmSegunTipo(o, tipo);
+  $("calc-info").textContent = `Ruta elegida (opción ${i + 1}): ${km} km de ${etiquetaTipoRuta(tipo)} (${fmtES(km * precioKm)}). Se guardará este valor.`;
+  const ver = document.createElement("a");
+  ver.href = base.url; ver.target = "_blank"; ver.rel = "noopener";
+  ver.textContent = " 🛣️ Previsualizar ruta";
+  $("calc-info").appendChild(document.createTextNode(" "));
+  $("calc-info").appendChild(ver);
+}
+function renderOpciones(base) {
+  const box = $("rutas-opciones");
+  box.innerHTML = "";
+  const ops = base.opciones || [];
+  if (ops.length < 2) {
+    box.innerHTML = '<span class="muted">Solo hay una ruta posible entre esos puntos; es la calculada.</span>';
+    return;
+  }
+  const tipo = tipoRutaActual();
+  const kmElegida = o => tipo === "ida" ? o.kmIda : o.kmIV;
+  const minKm = Math.min(...ops.map(kmElegida)), minT = Math.min(...ops.map(o => o.min));
+  ops.forEach((o, i) => {
+    const lab = document.createElement("label"); lab.className = "ruta-op";
+    const radio = document.createElement("input");
+    radio.type = "radio"; radio.name = "ruta"; radio.checked = i === 0;
+    radio.onchange = () => elegirOpcion(base, i);
+    const txt = document.createElement("span");
+    const marcas = [i === 0 ? "Recomendada" : null, kmElegida(o) === minKm ? "Más corta" : null, o.min === minT ? "Más rápida" : null].filter(Boolean).join(" · ");
+    txt.textContent = `Opción ${i + 1}: ${kmElegida(o)} km de ${etiquetaTipoRuta(tipo)} · ${o.min} min${marcas ? " (" + marcas + ")" : ""} `;
+    const ver = document.createElement("a");
+    ver.href = urlOpcion({ lat: base.oLat, lon: base.oLon }, { lat: base.dLat, lon: base.dLon }, o, midDe(base));
+    ver.target = "_blank"; ver.rel = "noopener"; ver.title = "Abrir esta opción en el mapa";
+    ver.textContent = "🛣️";
+    txt.appendChild(ver);
+    lab.append(radio, txt); box.appendChild(lab);
+  });
+}
+$("btn-elegir").onclick = async () => {
+  const box = $("rutas-opciones");
+  box.innerHTML = "";
+  $("calc-info").textContent = "Buscando rutas…";
+  try {
+    const base = await calcularKm($("f-origen").value, $("f-destino").value, $("f-via").value);
+    base._k = claveRuta();
+    ultimoCalculo = { ...base };
+    if (base.viaInput) {
+      box.innerHTML = '<span class="muted">Con parada intermedia hay una única ruta (pasando por la vía indicada); es la calculada.</span>';
+      const tipo = tipoRutaActual(), km = kmSegunTipo(base, tipo);
+      $("calc-info").textContent = `Calculado con ${base.proveedor} vía ${base.locV}: ${km} km de ${etiquetaTipoRuta(tipo)}.`;
+      return;
+    }
+    renderOpciones(base);
+    const tipo = tipoRutaActual(), km = kmSegunTipo(base, tipo);
+    $("calc-info").textContent = `Calculado con ${base.proveedor}: ${base.opciones.length} ruta(s). Elige una abajo; por defecto queda la recomendada (${km} km de ${etiquetaTipoRuta(tipo)}).`;
+  } catch (e) { $("calc-info").textContent = "Error: " + e.message; ultimoCalculo = null; }
+};
+$("btn-save").onclick = async () => {
+  const btn = $("btn-save");
+  if (btn.dataset.busy === "1") return; // evita duplicados por doble clic
+  btn.dataset.busy = "1"; btn.disabled = true;
+  try {
+  const origenInput = $("f-origen").value.trim(), viaInput = $("f-via").value.trim(), destinoInput = $("f-destino").value.trim();
+  const fecha = $("f-fecha").value, curso = $("f-curso").value.trim(), cod = $("f-cod").value.trim();
+  const obs = $("f-obs").value.trim(), tipoRuta = tipoRutaActual();
+  if (!fecha || !origenInput || !destinoInput || !curso) { alert("Fecha, origen, destino y curso son obligatorios."); return; }
+  let km, locO, locV, locD, aGeo, vGeo, bGeo, manual, rutaUrl = "", proveedor = "manual";
+  // Viaje que se está editando (para conservar localidades y enlace si no tocó direcciones)
+  let viejo = null;
+  if (editandoId) {
+    if (DEMO) viejo = demoSeed().find(x => String(x.id) === String(editandoId));
+    else viejo = (await sb.from("viajes").select("origen,destino,via,origen_geo,destino_geo,via_geo,ruta_url,tipo_ruta").eq("id", editandoId).single()).data;
+  }
+  const sinCambios = (geo, input) => extraerCalle(geo || "", "") === input;
+  const direccionesIntactas = viejo && sinCambios(viejo.origen_geo, origenInput)
+    && sinCambios(viejo.destino_geo, destinoInput) && sinCambios(viejo.via_geo || "", viaInput);
+  if ($("f-km").value) {
+    // Km manual: solo la localidad a la tabla; la calle completa queda como referencia
+    km = Math.round(+$("f-km").value);
+    if (direccionesIntactas && esLocalidadValida(viejo.origen) && esLocalidadValida(viejo.destino)) {
+      // No tocó las direcciones: conserva las localidades ya calculadas
+      // (evita que "Calle X, 2" acabe como localidad "2")
+      locO = viejo.origen; locD = viejo.destino; locV = viejo.via || "";
+    } else {
+      // Coordenadas: se busca la población para la tabla y el PDF
+      const co = leerCoordenadas(origenInput), cd = leerCoordenadas(destinoInput), cv = leerCoordenadas(viaInput);
+      const locDeCoord = async (c, texto) => c ? (await poblacionDeCoordenadas(c.lat, c.lon)).loc || "Coordenadas" : localidadDeTexto(texto);
+      locO = await locDeCoord(co, origenInput); locD = await locDeCoord(cd, destinoInput);
+      locV = viaInput ? await locDeCoord(cv, viaInput) : "";
+    }
+    aGeo = "manual: " + origenInput; bGeo = "manual: " + destinoInput;
+    vGeo = viaInput ? "manual: " + viaInput : "";
+    manual = true;
+    // Al pasar a manual un viaje ya calculado, conserva su enlace si no tocaste las direcciones
+    rutaUrl = (direccionesIntactas && viejo && viejo.ruta_url) ? viejo.ruta_url : "";
+  } else {
+    try {
+      const k = claveRuta();
+      const c = ultimoCalculo && ultimoCalculo._k === k ? ultimoCalculo : await calcularKm(origenInput, destinoInput, viaInput);
+      km = kmSegunTipo(c, tipoRuta); locO = c.locO; locD = c.locD; locV = c.locV || ""; rutaUrl = c.url || ""; proveedor = c.proveedor || "";
+      // En tabla/PDF solo va la localidad; la calle y nº quedan guardadas como referencia
+      aGeo = origenInput + " [" + c.aGeo + "]"; bGeo = destinoInput + " [" + c.bGeo + "]";
+      vGeo = viaInput ? viaInput + " [" + (c.viaGeo || "") + "]" : "";
+      manual = false;
+    } catch (e) { alert("No se pudo calcular: " + e.message); return; }
+  }
+  const total = +(km * precioKm).toFixed(2);
+  const origen = locO, destino = locD, via = locV || "";
+  const registro = { fecha, origen, via, destino, km, motivo_codigo: cod, motivo_curso: curso, precio_km: precioKm, total, origen_geo: aGeo, via_geo: vGeo, destino_geo: bGeo, manual, observaciones: obs, ruta_url: rutaUrl, proveedor, tipo_ruta: tipoRuta };
+  // Compatibilidad: si la tabla Supabase aún no tiene las columnas via/via_geo,
+  // reintenta sin ellas para no bloquear el guardado (pide ejecutar el schema nuevo).
+  const guardarSupabase = async (datos, esEdicion) => {
+    const intento = async d => esEdicion
+      ? sb.from("viajes").update(d).eq("id", editandoId)
+      : sb.from("viajes").insert({ user_id: perfil.id, ...d });
+    let r = await intento(datos), compatible = datos;
+    if (r.error && /tipo_ruta/i.test(r.error.message || "")) {
+      const { tipo_ruta: _tipo, ...sinTipo } = compatible;
+      compatible = sinTipo;
+      r = await intento(compatible);
+      if (!r.error) alert("Viaje guardado, pero la columna 'tipo_ruta' no existe aún en Supabase: ejecuta el schema.sql nuevo. Se ha usado la opción seleccionada para los km.");
+    }
+    if (r.error && /via/i.test(r.error.message || "")) {
+      const { via: _1, via_geo: _2, ...sinVia } = compatible;
+      compatible = sinVia;
+      r = await intento(compatible);
+      if (!r.error) alert("Viaje guardado, pero la columna 'via' no existe aún en Supabase: ejecuta el schema.sql nuevo para ver la parada intermedia.");
+    }
+    return r.error;
+  };
+  if (DEMO) {
+    const v = demoSeed();
+    if (editandoId) {
+      const i = v.findIndex(x => String(x.id) === String(editandoId));
+      if (i >= 0) v[i] = { ...v[i], ...registro };
+    } else v.push({ id: Date.now(), ...registro });
+    demoGuardar(v);
+  } else {
+    const error = await guardarSupabase(registro, !!editandoId);
+    if (error) { alert(error.message); return; }
+  }
+  salirEdicion();
+  cargarProf(); if (!$("v-coord").hidden) cargarCoord();
+  } finally { btn.dataset.busy = ""; btn.disabled = false; }
+};
+/* Editar: carga el viaje en el formulario para corregirlo */
+function extraerCalle(geo, localidad) {
+  geo = String(geo || "");
+  if (geo.startsWith("manual: ")) return geo.slice(8);
+  const i = geo.indexOf(" [");
+  if (i > 0) return geo.slice(0, i);
+  return localidad || geo;
+}
+async function entrarEdicion(id) {
+  let v;
+  if (DEMO) v = demoSeed().find(x => String(x.id) === String(id));
+  else v = (await sb.from("viajes").select("*").eq("id", id).single()).data;
+  if (!v) return;
+  editandoId = v.id;
+  $("f-fecha").value = v.fecha;
+  $("f-origen").value = extraerCalle(v.origen_geo, v.origen);
+  $("f-via").value = extraerCalle(v.via_geo || "", v.via || "");
+  $("f-destino").value = extraerCalle(v.destino_geo, v.destino);
+  $("f-cod").value = v.motivo_codigo || "";
+  $("f-curso").value = v.motivo_curso || "";
+  $("f-obs").value = v.observaciones || "";
+  $("f-km").value = v.manual ? v.km : "";
+  const tipoSeleccionado = tipoRutaSeleccionado();
+  if (tipoSeleccionado) tipoSeleccionado.checked = v.tipo_ruta === "ida";
+  ultimoCalculo = null;
+  $("calc-info").textContent = v.manual
+    ? "Editando con km manual (" + v.km + " km). Cambia el valor o borra el campo para recalcular con el mapa."
+    : "Editando viaje. Si cambias las direcciones, pulsa Calcular o se recalculará al actualizar.";
+  $("rutas-opciones").innerHTML = "";
+  if (v.ruta_url) {
+    const ver = document.createElement("a");
+    ver.href = v.ruta_url; ver.target = "_blank"; ver.rel = "noopener";
+    ver.textContent = " 🛣️ Ver ruta guardada";
+    $("calc-info").appendChild(document.createTextNode(" "));
+    $("calc-info").appendChild(ver);
+  }
+  $("btn-save").textContent = "Actualizar viaje";
+  $("btn-cancel-edit").hidden = false;
+  const tit = $("sec-viaje");
+  if (tit) {
+    tit.textContent = "✎ Editando viaje del " + String(v.fecha || "").split("-").reverse().join("/") + " — modifica y pulsa «Actualizar viaje»";
+    tit.classList.add("sec-editando");
+  }
+  (tit || $("btn-save")).scrollIntoView({ behavior: "smooth", block: "center" });
+}
+function salirEdicion() {
+  editandoId = null;
+  ["f-origen", "f-via", "f-destino", "f-cod", "f-curso", "f-km", "f-obs"].forEach(i => $(i).value = "");
+  $("f-origen").value = (perfil && perfil.domicilio) || ""; // origen por defecto
+  $("f-fecha").valueAsDate = new Date();
+  const tipoSeleccionado = tipoRutaSeleccionado();
+  if (tipoSeleccionado) tipoSeleccionado.checked = true; // Ida y Vuelta por defecto
+  ultimoCalculo = null; $("calc-info").textContent = "";
+  $("rutas-opciones").innerHTML = "";
+  $("btn-save").textContent = "Guardar viaje";
+  $("btn-cancel-edit").hidden = true;
+  const tit = $("sec-viaje");
+  if (tit) { tit.textContent = "🚗 Nuevo viaje"; tit.classList.remove("sec-editando"); }
+}
+$("btn-cancel-edit").onclick = salirEdicion;
+/* Mis datos: domicilio para el origen por defecto (nombre y DNI los gestiona la coordinadora) */
+function cargarDatos() {
+  if ($("f-nombre")) $("f-nombre").value = perfil.nombre || "";
+  if ($("f-nif")) $("f-nif").value = perfil.nif || "";
+  $("f-domicilio").value = perfil.domicilio || "";
+  if (!$("f-origen").value) $("f-origen").value = perfil.domicilio || "";
+}
+$("btn-datos").onclick = async () => {
+  const nombre = ($("f-nombre") ? $("f-nombre").value.trim() : perfil.nombre) || perfil.nombre || "",
+    nif = ($("f-nif") ? $("f-nif").value.trim().toUpperCase() : perfil.nif) || perfil.nif || "";
+  const domicilio = $("f-domicilio").value.trim();
+  perfil.nombre = nombre; perfil.nif = nif; perfil.domicilio = domicilio;
+  if (DEMO) {
+    try { localStorage.setItem("km_perfil_demo", JSON.stringify({ nombre, nif, domicilio })); } catch {}
+  } else {
+    let { error } = await sb.from("profiles").update({ nombre, nif, domicilio }).eq("id", perfil.id);
+    if (error && /domicilio/i.test(error.message || "")) {
+      // Tabla aún sin la columna domicilio: guarda el resto y avisa
+      ({ error } = await sb.from("profiles").update({ nombre, nif }).eq("id", perfil.id));
+      if (!error) alert("Datos guardados, pero la columna 'domicilio' no existe aún en Supabase: ejecuta el schema.sql nuevo.");
+    }
+    if (error) { alert(error.message); return; }
+  }
+  if ($("prof-nombre")) $("prof-nombre").textContent = nombre;
+  if (!$("f-origen").value) $("f-origen").value = domicilio;
+  alert("Datos guardados. Saldrán en la hoja del PDF y tu dirección será el origen por defecto.");
+};
+
+/* ---------- tickets de gasolina (una pagina por ticket en el PDF final) ---------- */
+const TICKETS_KEY = "km_tickets_demo"; // DEMO: [{id,nombre,dataUrl,viaje_id,fecha}]
+function leerTicketsArray() {
+  let raw = null;
+  try { raw = JSON.parse(localStorage.getItem(TICKETS_KEY) || "null"); } catch { return []; }
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  // migracion formato antiguo {"YYYY-MM":[...]} -> fecha = dia 15
+  const arr = [];
+  Object.entries(raw).forEach(([mes, lista]) => (lista || []).forEach(t => arr.push({ ...t, fecha: t.fecha || mes + "-15" })));
+  try { localStorage.setItem(TICKETS_KEY, JSON.stringify(arr)); } catch {}
+  return arr;
+}
+const guardarTicketsArray = a => localStorage.setItem(TICKETS_KEY, JSON.stringify(a));
+const ticketsDelRango = (desde, hasta) => leerTicketsArray().filter(t => (t.fecha || "") >= desde && (t.fecha || "") <= hasta);
+// Reduce foto a JPEG manejable (demo en localStorage y PDF ligero)
+function imagenADataUrl(im, max = 1600) {
+  const k = Math.min(1, max / Math.max(im.width, im.height));
+  const c = document.createElement("canvas");
+  c.width = Math.round(im.width * k); c.height = Math.round(im.height * k);
+  c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.82);
+}
+function leerFicheroComoImagen(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file);
+    const im = new Image();
+    im.onload = () => { URL.revokeObjectURL(url); res(im); };
+    im.onerror = rej; im.src = url;
+  });
+}
+// ¿Es un PDF? (por tipo MIME o por extensión; vale para tickets y certificados)
+const esPdfArchivo = file => (file.type || "").includes("pdf") || /\.pdf$/i.test(file.name || "");
+async function listarTickets(desde, hasta, uid) {
+  if (DEMO) return ticketsDelRango(desde, hasta).map(t => ({ id: t.id, nombre: t.nombre, viaje_id: t.viaje_id || null, src: t.dataUrl }));
+  let q = sb.from("tickets").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha");
+  if (uid) q = q.eq("user_id", uid);
+  const { data } = await q;
+  const out = [];
+  for (const t of (data || [])) {
+    const { data: blob } = await sb.storage.from("tickets").download(t.path);
+    if (!blob) continue;
+    // El tipo se deduce del nombre: los PDF antiguos no tienen campo 'tipo' en la tabla
+    const tipo = (t.tipo || ((blob.type || "").includes("pdf") || /\.pdf$/i.test(t.nombre || "") ? "pdf" : "img"));
+    out.push({ id: t.id, nombre: t.nombre, path: t.path, tipo, src: URL.createObjectURL(blob) });
+  }
+  return out;
+}
+async function renderTickets() {
+  const turno = ++turnoTick;
+  const { desde, hasta } = rangoProf();
+  // Viajes del periodo para asignar cada ticket a uno (o general del periodo)
+  let viajesMes = [];
+  if (DEMO) viajesMes = demoFiltrarRango(desde, hasta);
+  else viajesMes = (await sb.from("viajes").select("id,fecha,origen,via,destino").gte("fecha", desde).lte("fecha", hasta).order("fecha")).data || [];
+  const porId = Object.fromEntries(viajesMes.map(v => [String(v.id), v]));
+  const lista = await listarTickets(desde, hasta);
+  if (turno !== turnoTick) return;
+  const box = $("tickets-prev");
+  box.innerHTML = lista.length ? "" : '<span class="muted">Sin tickets en este periodo.</span>';
+  lista.forEach(t => {
+    const esPdf = (t.tipo || "").includes("pdf") || /\.pdf$/i.test(t.nombre || "");
+    const d = document.createElement("div"); d.className = "thumb";
+    const ver = document.createElement("button"); ver.type = "button"; ver.className = "ibtn sm ver-ticket";
+    ver.textContent = esPdf ? "Ver PDF" : "Ver imagen";
+    ver.onclick = () => window.open(t.src, "_blank", "noopener");
+    const v = t.viaje_id ? porId[String(t.viaje_id)] : null;
+    const leyenda = document.createElement("div");
+    leyenda.textContent = t.nombre + (v ? ` (${fmtFecha(v.fecha)} ${textoRutaPDF(v)})` : " (general)");
+    const btn = document.createElement("button"); btn.textContent = "Quitar"; btn.className = "ibtn danger sm";
+    btn.onclick = () => borrarTicket(t);
+    // En los PDF no se crea <img>: un src no visualizable dejaría el icono de archivo roto.
+    if (esPdf) {
+      const icono = document.createElement("div"); icono.className = "pdf-icono"; icono.textContent = "📄"; icono.title = t.nombre;
+      d.append(icono, ver, leyenda, btn);
+    } else {
+      const img = document.createElement("img"); img.src = t.src; img.alt = t.nombre;
+      d.append(img, ver, leyenda, btn);
+    }
+    box.appendChild(d);
+  });
+}
+async function borrarTicket(t) {
+  if (!confirm("¿Quitar este ticket?")) return;
+  if (DEMO) {
+    guardarTicketsArray(leerTicketsArray().filter(x => String(x.id) !== String(t.id)));
+  } else {
+    if (t.path) await sb.storage.from("tickets").remove([t.path]);
+    await sb.from("tickets").delete().eq("id", t.id);
+  }
+  renderTickets();
+}
+$("f-tickets").onchange = async ev => {
+  const { desde, hasta } = rangoProf();
+  const fTicket = hoyISO(); // tickets del periodo visible, sin asignar a viajes
+  for (const file of ev.target.files) {
+    try {
+      const esPdf = esPdfArchivo(file);
+      // Imágenes: se comprimen. PDF: se sube tal cual para no perder calidad de lectura.
+      let dataUrl = null, tipo = esPdf ? "pdf" : "img";
+      let contenido = file, tipoSubida = file.type || (esPdf ? "application/pdf" : "image/jpeg");
+      let nombrePath = file.name;
+      if (!esPdf) {
+        const im = await leerFicheroComoImagen(file);
+        dataUrl = imagenADataUrl(im);
+        contenido = await (await fetch(dataUrl)).blob();
+        tipoSubida = "image/jpeg";
+        nombrePath = file.name.replace(/\.[a-z0-9]+$/i, "") + ".jpg";
+      } else {
+        if (file.size > 5 * 1024 * 1024) alert("Ese PDF pesa más de 5 MB y ocupa bastante del almacenamiento gratuito. Si puedes, escanéalo a menor resolución.");
+        dataUrl = await leerFicheroDataUrl(file);
+      }
+      if (DEMO) {
+        const arr = leerTicketsArray();
+        arr.push({ id: Date.now() + Math.random(), nombre: file.name, tipo, dataUrl, viaje_id: null, fecha: fTicket });
+        try { guardarTicketsArray(arr); }
+        catch { alert("Ticket demasiado grande para la demo (límite del navegador). Se incluye igualmente en este PDF si no recargas."); }
+      } else {
+        // Se sube la versión comprimida (~200-400 KB) o el PDF original para no llenar el GB gratuito
+        const path = `${perfil.id}/${fTicket.slice(0, 7)}/${Date.now()}_${nombrePath}`;
+        const { error: e1 } = await sb.storage.from("tickets").upload(path, contenido, { contentType: tipoSubida });
+        if (e1) { alert("Error subiendo " + file.name + ": " + e1.message); continue; }
+        const { error: e2 } = await sb.from("tickets").insert({ user_id: perfil.id, mes: fTicket.slice(0, 7), fecha: fTicket, nombre: file.name, path, viaje_id: null });
+        if (e2) alert("Error registrando " + file.name + ": " + e2.message);
+      }
+    } catch { alert("No se pudo leer " + file.name); }
+  }
+  ev.target.value = "";
+  renderTickets(); cargarProf();
+};
+/* ---------- certificados de asistencia (uno por curso, con arrastrar/soltar) ---------- */
+const CERTS_KEY = "km_certificados_demo"; // DEMO: [{id,curso_codigo,nombre,tipo,dataUrl}]
+const certDemo = () => { // Migra certificados demo antiguos por viaje al código de su curso.
+  const arr = leerCertsArray();
+  arr.forEach(c => {
+    if (!c.curso_codigo && c.viaje_id) { const v = demoSeed().find(x => String(x.id) === String(c.viaje_id)); if (v) c.curso_codigo = codigoCurso(v).toUpperCase(); }
+    c.user_id = c.user_id || (perfil && perfil.id);
+  });
+  guardarCertsArray(arr); return arr;
+};
+function leerCertsArray() {
+  try { const v = JSON.parse(localStorage.getItem(CERTS_KEY) || "null"); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+const guardarCertsArray = a => localStorage.setItem(CERTS_KEY, JSON.stringify(a));
+function leerFicheroDataUrl(file) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(file);
+  });
+}
+// Chrome no permite abrir data: en pestaña nueva -> pasar por blob (si permitido)
+async function dataUrlABlobUrl(dataUrl) {
+  const r = await fetch(dataUrl);
+  return URL.createObjectURL(await r.blob());
+}
+// Una línea por código de curso del periodo con su único certificado.
+async function renderCerts(viajes) {
+  const turno = ++turnoCert;
+  const box = $("cert-lineas"), cursos = cursosUnicos(viajes);
+  if (!cursos.length) { box.innerHTML = '<span class="muted">No hay cursos con código en este periodo.</span>'; return; }
+  const codigos = cursos.map(codigoCurso), mapa = {};
+  if (DEMO) certDemo().forEach(c => mapa[String(c.curso_codigo || "").toUpperCase()] = c);
+  else ((await sb.from("certificados").select("*").in("curso_codigo", codigos.map(c => c.toUpperCase()))).data || []).forEach(c => mapa[String(c.curso_codigo).toUpperCase()] = c);
+  if (turno !== turnoCert) return;
+  box.innerHTML = "";
+  cursos.forEach(v => {
+    const cod = codigoCurso(v), c = mapa[cod.toUpperCase()];
+    const linea = document.createElement("div"); linea.className = "cert-linea";
+    const info = document.createElement("span"); info.className = "viaje";
+    const numeroViajes = numeroViajesCurso(viajes, cod);
+    info.textContent = `${cod} · ${v.motivo_curso || "Sin nombre"} · ${numeroViajes} viaje(s)`;
+    const zona = document.createElement("div"); zona.className = "dropzone" + (c ? " ok" : "");
+    zona.textContent = c ? `📜 ${c.nombre}` : "Arrastra imagen/PDF o pulsa aquí";
+    zona.title = c ? c.nombre : "Anexar el certificado de asistencia de este curso";
+    const input = document.createElement("input");
+    input.type = "file"; input.accept = "image/*,.pdf,application/pdf"; input.hidden = true;
+    input.onchange = () => { if (input.files[0]) subirCert(cod, input.files[0]); input.value = ""; };
+    zona.onclick = () => input.click();
+    zona.ondragover = ev => { ev.preventDefault(); zona.classList.add("over"); };
+    zona.ondragleave = () => zona.classList.remove("over");
+    zona.ondrop = ev => { ev.preventDefault(); zona.classList.remove("over"); if (ev.dataTransfer.files[0]) subirCert(cod, ev.dataTransfer.files[0]); };
+    linea.append(info, zona, input);
+    if (c) {
+      const ver = document.createElement("a"); ver.textContent = "Ver"; ver.href = "#"; ver.className = "ver";
+      ver.onclick = async ev => {
+        ev.preventDefault();
+        const win = window.open("", "_blank"); // dentro del clic para que no lo bloquee
+        if (!win) { alert("El navegador bloqueó la pestaña. Permite emergentes para este sitio."); return; }
+        try {
+          if (DEMO) win.location.href = await dataUrlABlobUrl(c.dataUrl);
+          else {
+            const { data: blob } = await sb.storage.from("certificados").download(c.path);
+            if (!blob) throw new Error("vacio");
+            win.location.href = URL.createObjectURL(blob);
+          }
+        } catch { win.close(); alert("No se pudo abrir el certificado."); }
+      };
+      const quitar = document.createElement("button"); quitar.textContent = "Quitar"; quitar.className = "ibtn danger sm";
+      quitar.onclick = () => quitarCert(c);
+      linea.append(ver, quitar);
+    }
+    box.appendChild(linea);
+  });
+}
+async function subirCert(cursoCodigo, file) {
+  const codigo = String(cursoCodigo || "").trim().toUpperCase();
+  if (!codigo) { alert("El curso necesita un código para guardar su certificado."); return; }
+  const esPdf = (file.type || "").includes("pdf") || /\.pdf$/i.test(file.name);
+  if (DEMO) {
+    let dataUrl = null;
+    try { dataUrl = esPdf ? await leerFicheroDataUrl(file) : imagenADataUrl(await leerFicheroComoImagen(file)); }
+    catch { dataUrl = null; }
+    if (!dataUrl) { alert("No se pudo leer " + file.name); return; }
+    const arr = leerCertsArray().filter(c => String(c.curso_codigo || "").toUpperCase() !== codigo);
+    arr.push({ id: Date.now() + Math.random(), curso_codigo: codigo, nombre: file.name, tipo: esPdf ? "pdf" : "img", dataUrl });
+    try { guardarCertsArray(arr); } catch { alert("Documento demasiado grande para la demo (límite del navegador)."); return; }
+  } else {
+    const { data: prev } = await sb.from("certificados").select("*").eq("curso_codigo", codigo).eq("user_id", perfil.id);
+    for (const p of (prev || [])) { await sb.storage.from("certificados").remove([p.path]); await sb.from("certificados").delete().eq("id", p.id); }
+    // Fotos: se suben comprimidas (~200-400 KB) para no llenar el GB gratuito; PDF tal cual
+    let blobSubir = file, tipoSubida = file.type || (esPdf ? "application/pdf" : "image/jpeg");
+    let nombrePath = file.name;
+    if (!esPdf) {
+      try {
+        blobSubir = await (await fetch(imagenADataUrl(await leerFicheroComoImagen(file)))).blob();
+        tipoSubida = "image/jpeg";
+        nombrePath = file.name.replace(/\.[a-z0-9]+$/i, "") + ".jpg";
+      } catch { alert("No se pudo leer " + file.name); return; }
+    } else if (file.size > 5 * 1024 * 1024) {
+      alert("Ese PDF pesa más de 5 MB y ocupa bastante del almacenamiento gratuito. Si puedes, escanéalo a menor resolución.");
+    }
+    const carpetaCurso = codigo.replace(/[^A-Z0-9_-]/g, "_");
+    const path = `${perfil.id}/cursos/${carpetaCurso}/${Date.now()}_${nombrePath}`;
+    const { error: e1 } = await sb.storage.from("certificados").upload(path, blobSubir, { contentType: tipoSubida });
+    if (e1) { alert("Error subiendo: " + e1.message); return; }
+    const { error: e2 } = await sb.from("certificados").insert({ user_id: perfil.id, curso_codigo: codigo, nombre: file.name, path, tipo: esPdf ? "pdf" : "img" });
+    if (e2) { await sb.storage.from("certificados").remove([path]); alert("Error registrando: " + e2.message); return; }
+  }
+  cargarProf();
+}
+async function quitarCert(c) {
+  if (!confirm("¿Quitar este certificado?")) return;
+  if (DEMO) guardarCertsArray(leerCertsArray().filter(x => String(x.id) !== String(c.id)));
+  else { await sb.storage.from("certificados").remove([c.path]); await sb.from("certificados").delete().eq("id", c.id); }
+  cargarProf();
+}
+// Certificados de los cursos visibles (para el PDF)
+async function listarCerts(viajes, userId = perfil && perfil.id) {
+  const codigos = [...new Set((viajes || []).map(codigoCurso).filter(Boolean).map(c => c.toUpperCase()))];
+  if (!codigos.length) return [];
+  if (DEMO) return certDemo().filter(c => (!userId || c.user_id === userId) && codigos.includes(String(c.curso_codigo || "").toUpperCase()))
+    .map(c => ({ ...c, src: c.dataUrl }));
+  const { data } = await sb.from("certificados").select("*").in("curso_codigo", codigos).eq("user_id", userId);
+  const out = [];
+  for (const c of (data || [])) {
+    const { data: blob } = await sb.storage.from("certificados").download(c.path);
+    if (blob) out.push({ ...c, src: URL.createObjectURL(blob) });
+  }
+  return out;
+}
+const faltanCerts = (viajes, certs) => cursosUnicos(viajes).filter(v =>
+  !(certs || []).some(c => String(c.curso_codigo || "").toUpperCase() === codigoCurso(v).toUpperCase()));
+// PDF (escaneado) -> paginas como imagenes para anexarlas
+async function pdfAPaginas(src) {
+  const pdf = await window.pdfjsLib.getDocument(src).promise;
+  const out = [];
+  for (let p = 1; p <= Math.min(pdf.numPages, 20); p++) {
+    const page = await pdf.getPage(p);
+    const vp = page.getViewport({ scale: 1.6 });
+    const cv = document.createElement("canvas");
+    cv.width = Math.ceil(vp.width); cv.height = Math.ceil(vp.height);
+    await page.render({ canvasContext: cv.getContext("2d"), viewport: vp }).promise;
+    out.push({ jpg: cv.toDataURL("image/jpeg", 0.85), w: cv.width, h: cv.height });
+  }
+  return out;
+}
+async function imagenNormalizada(src) {
+  const im = await cargarImagenTicket(src);
+  return { jpg: imagenADataUrl(im), w: im.width, h: im.height };
+}
+function paginaAnexo(doc, jpg, w, h, titulo) {
+  doc.addPage("a4", "p"); // anexos siempre en vertical
+  const PW = doc.internal.pageSize.getWidth(), PH = doc.internal.pageSize.getHeight();
+  doc.setFontSize(11);
+  doc.text(titulo, 40, 40);
+  const k = Math.min((PW - 80) / w, (PH - 110) / h);
+  doc.addImage(jpg, "JPEG", (PW - w * k) / 2, 60, w * k, h * k);
+}
+// Logo con fondo blanco (el PNG es transparente y el JPEG no admite alfa)
+function logoADataUrl(im) {
+  const k = Math.min(1, 700 / im.width);
+  const c = document.createElement("canvas");
+  c.width = Math.round(im.width * k); c.height = Math.round(im.height * k);
+  const x = c.getContext("2d");
+  x.fillStyle = "#ffffff"; x.fillRect(0, 0, c.width, c.height);
+  x.drawImage(im, 0, 0, c.width, c.height);
+  return { jpg: c.toDataURL("image/jpeg", 0.92), w: c.width, h: c.height };
+}
+$("btn-pdf").onclick = async () => {
+  const { desde, hasta } = rangoProf();
+  let data;
+  if (DEMO) data = demoFiltrarRango(desde, hasta);
+  else data = (await sb.from("viajes").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha")).data;
+  if (!data?.length) { alert("Sin viajes en ese periodo."); return; }
+  data = viajesVisibles(data);
+  if (!data.length) { alert("No hay viajes operativos en ese periodo."); return; }
+  const kmPeriodo = data.reduce((a, x) => a + (+x.km || 0), 0);
+  if (kmPeriodo > LIMITE_KM_PERIODO && !confirm(`El periodo supera el límite de ${LIMITE_KM_PERIODO} km (${Math.round(kmPeriodo)} km). ¿Generar el PDF igualmente?`)) return;
+  const certs = await listarCerts(data);
+  const sin = faltanCerts(data, certs);
+  if (sin.length && !confirm(`Hay ${sin.length} curso(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
+  const tickets = await listarTickets(desde, hasta);
+  await pdfHoja(perfil, data, { desde, hasta }, { certs, tickets });
+};
+/*Correo para Outlook (.eml): Para/CC/asunto/cuerpo + PDF anexado.
+  El "De" lo pone el Outlook del profesor con su cuenta predeterminada. */
+const CORREO_PARA = "mfernandez@grupomainjobs.com";
+const CORREO_CC = "asoler@grupomainjobs.com";
+const b64utf8 = s => btoa(unescape(encodeURIComponent(s)));
+const plegarAsunto = s => "Subject: " + ((b64utf8(s).match(/.{1,45}/g) || []).map(t => `=?UTF-8?B?${t}?=`).join("\r\n "));
+function construirEml({ para, cc, asunto, cuerpo, nombrePdf, pdfBase64 }) {
+  const B = "limite-" + Date.now().toString(36);
+  const partePdf = pdfBase64.replace(/.{1,76}/g, "$&\r\n");
+  return ["MIME-Version: 1.0",
+    `To: ${para}`, `Cc: ${cc}`, plegarAsunto(asunto),
+    `Content-Type: multipart/mixed; boundary="${B}"`, "",
+    `--${B}`, `Content-Type: text/plain; charset="utf-8"`, "Content-Transfer-Encoding: 8bit", "",
+    cuerpo, "",
+    `--${B}`, `Content-Type: application/pdf; name="${nombrePdf}"`,
+    "Content-Transfer-Encoding: base64", `Content-Disposition: attachment; filename="${nombrePdf}"`, "",
+    partePdf, `--${B}--`, ""
+  ].join("\r\n");
+}
+function descargarFichero(nombre, contenido, tipo) {
+  const blob = contenido instanceof Blob ? contenido : new Blob([contenido], { type: tipo });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = nombre;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 3000);
+}
+$("btn-correo").onclick = async () => {
+  const { desde, hasta } = rangoProf();
+  let data;
+  if (DEMO) data = demoFiltrarRango(desde, hasta);
+  else data = (await sb.from("viajes").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha")).data;
+  if (!data?.length) { alert("Sin viajes en ese periodo."); return; }
+  data = viajesVisibles(data);
+  if (!data.length) { alert("No hay viajes operativos en ese periodo."); return; }
+  const kmPeriodo = data.reduce((a, x) => a + (+x.km || 0), 0);
+  if (kmPeriodo > LIMITE_KM_PERIODO && !confirm(`El periodo supera el límite de ${LIMITE_KM_PERIODO} km (${Math.round(kmPeriodo)} km). ¿Generar el PDF igualmente?`)) return;
+  const certs = await listarCerts(data);
+  const sin = faltanCerts(data, certs);
+  if (sin.length && !confirm(`Hay ${sin.length} curso(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
+  const tickets = await listarTickets(desde, hasta);
+  const { nombrePdf, dataUri, tamMB } = await pdfHoja(perfil, data, { desde, hasta }, { certs, tickets }, true);
+  if (tamMB > 10 && !confirm(`El PDF pesa ${tamMB.toFixed(1)} MB y puede dar problemas al enviarlo por correo. ¿Generar el .eml igualmente?`)) return;
+  const periodo = `${fmtFecha(desde)} - ${fmtFecha(hasta)}`;
+  const eml = construirEml({
+    para: CORREO_PARA, cc: CORREO_CC,
+    asunto: `Documentación de kilometraje de ${perfil.nombre} del periodo ${periodo}`,
+    cuerpo: `Hola Mara:\n\nAdjunto te envío la hoja de kilometraje correspondiente al periodo del ${periodo}\n\nUn saludo,\n${perfil.nombre || ""}`,
+    nombrePdf, pdfBase64: dataUri.split(",")[1],
+  });
+  descargarFichero(`Correo_kilometraje_${desde}_${hasta}.eml`, eml, "message/rfc822");
+  alert("Correo generado: ábrelo y se abrirá en Outlook con el PDF anexado, listo para enviar.");
+};
+/* Archivar periodo: descarga el PDF final como copia local y borra de la nube
+   los certificados y tickets del periodo (los viajes se conservan). */
+async function borrarFicheros(certs, tickets) {
+  if (DEMO) {
+    const idsC = new Set((certs || []).map(c => String(c.id)));
+    const idsT = new Set((tickets || []).map(t => String(t.id)));
+    guardarCertsArray(leerCertsArray().filter(c => !idsC.has(String(c.id))));
+    guardarTicketsArray(leerTicketsArray().filter(t => !idsT.has(String(t.id))));
+  } else {
+    for (const c of (certs || [])) {
+      if (c.path) await sb.storage.from("certificados").remove([c.path]);
+      await sb.from("certificados").delete().eq("id", c.id);
+    }
+    for (const t of (tickets || [])) {
+      if (t.path) await sb.storage.from("tickets").remove([t.path]);
+      await sb.from("tickets").delete().eq("id", t.id);
+    }
+  }
+}
+async function archivarRango(viajes, prof, desde, hasta, uid) {
+  if (!viajes?.length) { alert("Sin viajes en ese periodo."); return; }
+  const certs = await listarCerts(viajes, uid);
+  const tickets = await listarTickets(desde, hasta, uid);
+  if (!certs.length && !tickets.length) { alert("No hay ficheros en la nube en este periodo: nada que archivar."); return; }
+  await pdfHoja(prof, viajes, { desde, hasta }, { certs, tickets }); // copia local
+  if (!confirm(`Copia descargada (${certs.length} certificado(s) y ${tickets.length} ticket(s)). ¿Borrarlos de la nube? Los viajes se conservan.`)) return;
+  await borrarFicheros(certs, tickets);
+  alert("Periodo archivado: ficheros borrados de la nube, viajes conservados.");
+  if (!$("v-prof").hidden) cargarProf();
+  if (!$("v-coord").hidden) cargarCoord();
+}
+$("btn-archivar-coord").onclick = async () => {
+  const { desde, hasta } = rangoCoord();
+  if (DEMO) { await archivarRango(demoFiltrarRango(desde, hasta), perfil, desde, hasta); return; }
+  const p = await profFiltroCoord();
+  if (!p) return;
+  const uid = p.id;
+  const { data: v } = await sb.from("viajes").select("*").eq("user_id", uid).gte("fecha", desde).lte("fecha", hasta).order("fecha");
+  await archivarRango(v || [], p, desde, hasta, uid);
+};
+
+/* ---------- Excel del coordinador (exporta lo visible, importa viajes) ---------- */
+function exportarCoordExcel() {
+  if (!window.XLSX) { alert("No se pudo cargar la librería Excel (¿sin internet?)."); return; }
+  const { desde, hasta } = rangoCoord();
+  if (!ultimosCoord.length) { alert("Sin viajes en ese periodo."); return; }
+  const filas = ultimosCoord.map(v => ({
+    "Fecha": fmtFecha(v.fecha),
+    "Profesor": (v.profiles && v.profiles.nombre) || "",
+    "Origen": v.origen || "",
+    "Destino": v.destino || "",
+    "Km": +v.km || 0,
+    "€/km": String(v.precio_km).replace(".", ","),
+    "Total €": String(v.total).replace(".", ","),
+    "Código": v.motivo_codigo || "",
+    "Curso": v.motivo_curso || "",
+    "Observaciones": v.observaciones || "",
+    "Certificado": ultimosCertMap[`${v.user_id}|${codigoCurso(v).toUpperCase()}`] ? "Sí" : "No"
+  }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas), "Viajes");
+  XLSX.writeFile(wb, `Kilometraje_${desde}_${hasta}.xlsx`);
+}
+const normCab = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+function parseFechaImp(x) {
+  if (x == null || x === "") return null;
+  if (x instanceof Date && !isNaN(x)) return x.toISOString().slice(0, 10);
+  if (typeof x === "number") {
+    const d = (window.XLSX && XLSX.SSF) ? XLSX.SSF.parse_date_code(x) : null;
+    if (d) return `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
+    return null;
+  }
+  const s = String(x).trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  return null;
+}
+async function importarCoordExcel(file) {
+  if (!window.XLSX) { alert("No se pudo cargar la librería Excel (¿sin internet?)."); return; }
+  const buf = await file.arrayBuffer();
+  let filas;
+  try {
+    const wb = XLSX.read(buf);
+    filas = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
+  } catch (e) { alert("No se pudo leer el archivo: " + e.message); return; }
+  if (!filas.length) { alert("El Excel no tiene filas."); return; }
+  const filtroNombre = $("filtro-prof").value;
+  let profFijo = (filtroNombre && mapaProfs[filtroNombre]) || null;
+  if (DEMO && !profFijo) profFijo = { id: perfil.id, nombre: perfil.nombre };
+  if (filtroNombre && !profFijo && !DEMO) {
+    const { data } = await sb.from("profiles").select("*").eq("nombre", filtroNombre).single();
+    profFijo = data;
+  }
+  const buenos = [], malos = [];
+  filas.forEach((r, i) => {
+    const o = {};
+    Object.entries(r).forEach(([k, v]) => o[normCab(k)] = v);
+    const fecha = parseFechaImp(o.fecha);
+    const origen = String(o.origen || "").trim(), destino = String(o.destino || "").trim();
+    const km = parseFloat(String(o.km).replace(",", "."));
+    let uid = null;
+    if (profFijo) uid = profFijo.id;
+    else {
+      const np = String(o.profesor || o.profesora || "").trim();
+      const clave = Object.keys(mapaProfs).find(k => k.toLowerCase() === np.toLowerCase());
+      if (clave) uid = mapaProfs[clave].id;
+    }
+    const cod = String(o.codigo || "").trim();
+    const curso = String(o.curso || o.motivo || "").trim();
+    const obs = String(o.observaciones || o.observacion || "").trim();
+    if (!fecha || !origen || !destino || !(km > 0) || !uid || !curso) { malos.push(i + 2); return; }
+    const total = Math.round(km * precioKm * 100) / 100;
+    buenos.push({ user_id: uid, fecha, origen, via: "", destino, km, motivo_codigo: cod, motivo_curso: curso, precio_km: precioKm, total, origen_geo: "", via_geo: "", destino_geo: "", manual: false, observaciones: obs, ruta_url: "", proveedor: "excel" });
+  });
+  if (!buenos.length) { alert("Sin filas válidas. Columnas: Fecha, Origen, Destino, Km, Curso" + (profFijo ? "" : " y Profesor") + (malos.length ? ". Filas con error: " + malos.join(", ") : "")); return; }
+  const quien = profFijo ? profFijo.nombre : "sus profesores";
+  if (!confirm(`Importar ${buenos.length} viaje(s) para ${quien}?` + (malos.length ? ` (${malos.length} fila(s) con error se omitirán: ${malos.join(", ")})` : ""))) return;
+  if (DEMO) {
+    const v = demoSeed();
+    buenos.forEach(b => v.push({ id: Date.now() + Math.floor(Math.random() * 1e6), ...b }));
+    demoGuardar(v);
+  } else {
+    const { error } = await sb.from("viajes").insert(buenos);
+    if (error) { alert(error.message); return; }
+  }
+  alert(`${buenos.length} viaje(s) importados.` + (malos.length ? ` Filas omitidas: ${malos.join(", ")}.` : ""));
+  cargarCoord();
+}
+
+/* ---------- tablon de anuncios ---------- */
+const ANUN_KEY = "km_anuncios_demo";
+const leerAnunciosDemo = () => { try { return JSON.parse(localStorage.getItem(ANUN_KEY) || "[]"); } catch { return []; } };
+const guardarAnunciosDemo = v => localStorage.setItem(ANUN_KEY, JSON.stringify(v));
+let editandoAnuncio = null, canalTablon = null;
+/* Quita scripts y manejadores antes de guardar/mostrar */
+function sanearHtml(h) {
+  const d = document.createElement("div");
+  d.innerHTML = h;
+  d.querySelectorAll("script,iframe,object,embed,link,style,meta").forEach(n => n.remove());
+  d.querySelectorAll("*").forEach(n => {
+    [...n.attributes].forEach(a => {
+      if (/^on/i.test(a.name) || (a.name === "href" && /^\s*javascript:/i.test(a.value))) n.removeAttribute(a.name);
+    });
+  });
+  return d.innerHTML;
+}
+async function listarAnuncios() {
+  if (DEMO) return leerAnunciosDemo().sort((a, b) => b.id - a.id);
+  const { data } = await sb.from("anuncios").select("*").order("created_at", { ascending: false });
+  return data || [];
+}
+/* Lo que ven los profesores encima de Mis desplazamientos */
+async function pintarTablon() {
+  const box = $("tablon-prof");
+  if (!box) return;
+  const lista = await listarAnuncios();
+  if (!lista.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<h3 class="sec sec-tablon">📢 Tablón de anuncios</h3>` + lista.map(a =>
+    `<div class="anuncio">${sanearHtml(a.html)}<span class="anuncio-fecha">${new Date(a.created_at).toLocaleString("es-ES", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span></div>`).join("");
+}
+/* Lo que gestiona la coordinadora */
+async function listarAnunciosCoord() {
+  const box = $("anuncios-coord");
+  if (!box) return;
+  const lista = await listarAnuncios();
+  box.innerHTML = lista.length ? "" : '<span class="muted">Sin anuncios publicados.</span>';
+  lista.forEach(a => {
+    const d = document.createElement("div");
+    d.className = "anuncio-item";
+    d.innerHTML = `${sanearHtml(a.html)}<div class="fila-btns"><button class="ibtn" data-ed title="Editar">✎ Editar</button><button class="ibtn danger" data-del title="Borrar">✕ Borrar</button></div>`;
+    d.querySelector("[data-ed]").onclick = () => {
+      editandoAnuncio = a.id;
+      $("anuncio-editor").innerHTML = a.html;
+      $("btn-anuncio-pub").textContent = "Actualizar anuncio";
+      $("btn-anuncio-cancel").hidden = false;
+      $("anuncio-editor").focus();
+    };
+    d.querySelector("[data-del]").onclick = async () => {
+      if (!confirm("¿Borrar este anuncio?")) return;
+      if (DEMO) guardarAnunciosDemo(leerAnunciosDemo().filter(x => String(x.id) !== String(a.id)));
+      else await sb.from("anuncios").delete().eq("id", a.id);
+      pintarTablon(); listarAnunciosCoord();
+    };
+    box.appendChild(d);
+  });
+}
+document.querySelectorAll(".toolbar [data-cmd]").forEach(b => b.onclick = () => { $("anuncio-editor").focus(); document.execCommand(b.dataset.cmd, false, null); });
+$("tb-color").oninput = e => { $("anuncio-editor").focus(); document.execCommand("foreColor", false, e.target.value); };
+$("tb-tam").onchange = e => { $("anuncio-editor").focus(); document.execCommand("fontSize", false, e.target.value); };
+document.querySelectorAll(".toolbar [data-emoji]").forEach(b => b.onclick = () => { $("anuncio-editor").focus(); document.execCommand("insertText", false, b.dataset.emoji); });
+$("btn-anuncio-pub").onclick = async () => {
+  if (!$("anuncio-editor").textContent.trim()) { alert("Escribe el anuncio primero."); return; }
+  const html = sanearHtml($("anuncio-editor").innerHTML);
+  if (DEMO) {
+    const v = leerAnunciosDemo();
+    if (editandoAnuncio) {
+      const i = v.findIndex(x => String(x.id) === String(editandoAnuncio));
+      if (i >= 0) v[i].html = html;
+    } else v.push({ id: Date.now(), user_id: perfil.id, html, created_at: new Date().toISOString() });
+    guardarAnunciosDemo(v);
+  } else if (editandoAnuncio) {
+    const { error } = await sb.from("anuncios").update({ html }).eq("id", editandoAnuncio);
+    if (error) { alert(error.message); return; }
+  } else {
+    const { error } = await sb.from("anuncios").insert({ user_id: perfil.id, html });
+    if (error) { alert(error.message); return; }
+  }
+  editandoAnuncio = null;
+  $("anuncio-editor").innerHTML = "";
+  $("btn-anuncio-pub").textContent = "Publicar anuncio";
+  $("btn-anuncio-cancel").hidden = true;
+  pintarTablon(); listarAnunciosCoord();
+};
+$("btn-anuncio-cancel").onclick = () => {
+  editandoAnuncio = null;
+  $("anuncio-editor").innerHTML = "";
+  $("btn-anuncio-pub").textContent = "Publicar anuncio";
+  $("btn-anuncio-cancel").hidden = true;
+};
+
+/* ---------- coordinador (tiempo real) ---------- */
+let canal = null;
+let mapaProfs = {}; // nombre -> perfil (para PDF/archivar segun el filtro)
+let ultimosCoord = [], ultimosCertMap = {}; // ultima tabla del coordinador (para Excel)
+/* Profesor elegido en el filtro de arriba (lo usan PDF y Archivar) */
+async function profFiltroCoord() {
+  const nombre = $("filtro-prof").value;
+  if (!nombre) { alert("Elige un profesor en el filtro de arriba."); return null; }
+  if (mapaProfs[nombre]) return mapaProfs[nombre];
+  const { data } = await sb.from("profiles").select("*").eq("nombre", nombre).single();
+  return data;
+}
+async function initCoord() {
+  $("desde-coord").value = primerDia(); $("hasta-coord").value = ultimoDia();
+  aplicarFiltrosGuardados();
+  const { data: profs } = await sb.from("profiles").select("*").eq("rol", "profesor").order("nombre");
+  mapaProfs = Object.fromEntries((profs || []).map(p => [p.nombre, p]));
+  $("filtro-prof").innerHTML = `<option value="">Todos</option>` + (profs || []).map(p => `<option value="${esc(p.nombre)}">${esc(p.nombre)}</option>`).join("");
+  $("precio").value = String(precioKm).replace(".", ",");
+  $("filtro-prof").onchange = cargarCoord;
+  $("btn-exp-coord").onclick = exportarCoordExcel;
+  $("btn-imp-coord").onclick = () => $("f-imp-coord").click();
+  $("f-imp-coord").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importarCoordExcel(f); };
+  const exP = localStorage.getItem("km_excluir_prueba");
+  $("f-excluir-prueba").checked = exP === null ? true : exP === "1";
+  $("f-excluir-prueba").onchange = e => { try { localStorage.setItem("km_excluir_prueba", e.target.checked ? "1" : "0"); } catch {} cargarCoord(); };
+  $("btn-precio").onclick = async () => {
+    const v = $("precio").value.replace(",", ".");
+    const { error } = await sb.from("settings").upsert({ clave: "precio_km", valor: v });
+    if (!error) { precioKm = +v; alert("Precio actualizado."); }
+  };
+  $("btn-pdf-coord").onclick = async () => {
+    const { desde, hasta } = rangoCoord();
+    const p = await profFiltroCoord();
+    if (!p) return;
+    const uid = p.id;
+    const { data: v } = await sb.from("viajes").select("*").eq("user_id", uid).gte("fecha", desde).lte("fecha", hasta).order("fecha");
+    if (!v?.length) { alert("Sin viajes en ese periodo."); return; }
+    v = viajesVisibles(v);
+    if (!v.length) { alert("No hay viajes operativos en ese periodo."); return; }
+    const kmPeriodo = v.reduce((a, x) => a + (+x.km || 0), 0);
+    if (kmPeriodo > LIMITE_KM_PERIODO && !confirm(`El periodo supera el límite de ${LIMITE_KM_PERIODO} km (${Math.round(kmPeriodo)} km). ¿Generar el PDF igualmente?`)) return;
+    const certs = await listarCerts(v, uid);
+    const sin = faltanCerts(v, certs);
+    if (sin.length && !confirm(`Hay ${sin.length} curso(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
+    await pdfHoja(p, v, { desde, hasta }, { certs, tickets: await listarTickets(desde, hasta, uid) });
+  };
+  await cargarCoord();
+  listarAnunciosCoord();
+  if (canal) sb.removeChannel(canal); // suscripcion en directo: ve viajes y certificados "a medida que los meten"
+  canal = sb.channel("viajes-live")
+    .on("postgres_changes", { event: "*", schema: "public", table: "viajes" }, cargarCoord)
+    .on("postgres_changes", { event: "*", schema: "public", table: "certificados" }, cargarCoord)
+    .on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, cargarCoord)
+    .on("postgres_changes", { event: "*", schema: "public", table: "anuncios" }, () => { listarAnunciosCoord(); pintarTablon(); })
+    .subscribe();
+}
+async function cargarCoord() {
+  const turno = ++turnoCoord;
+  const { desde, hasta } = rangoCoord(), f = $("filtro-prof").value.trim().toLowerCase();
+  let data;
+  if (DEMO) {
+    data = demoFiltrarRango(desde, hasta).map(v => ({ ...v, user_id: perfil.id, profiles: { nombre: perfil.nombre } }))
+      .filter(v => !f || v.profiles.nombre.toLowerCase().includes(f));
+  } else {
+    let q = sb.from("viajes").select("*, profiles!inner(nombre)").gte("fecha", desde).lte("fecha", hasta).order("fecha");
+    if (f) q = q.ilike("profiles.nombre", `%${f}%`);
+    data = (await q).data;
+  }
+  if ($("f-excluir-prueba").checked) data = (data || []).filter(v => !/prueba/i.test((v.profiles && v.profiles.nombre) || ""));
+  data = viajesVisibles(data);
+  const tb = $("t-coord").querySelector("tbody"); tb.innerHTML = "";
+  let tot = 0, totKm = 0;
+  data = agrupCoord ? ordenarComoPdf(data) : (data || []).sort(compararViajes(ordenCoord.campo, ordenCoord.dir));
+  ultimosCoord = data || [];
+  const colores = mapaColoresCursos(data);
+  const codigosCoord = [...new Set((data || []).map(codigoCurso).filter(Boolean).map(c => c.toUpperCase()))];
+  const certMap = {};
+  if (codigosCoord.length) {
+    const listaC = DEMO ? certDemo().filter(c => codigosCoord.includes(String(c.curso_codigo || "").toUpperCase()))
+      : ((await sb.from("certificados").select("user_id,curso_codigo,nombre,path,tipo").in("curso_codigo", codigosCoord)).data || []);
+    listaC.forEach(c => certMap[`${c.user_id}|${String(c.curso_codigo).toUpperCase()}`] = c);
+  }
+  ultimosCertMap = certMap;
+  if (turno !== turnoCoord) return; // una carga más reciente tomó el relevo
+  const certDe = v => certMap[`${v.user_id}|${codigoCurso(v).toUpperCase()}`];
+  const celdaC = v => certDe(v)
+    ? `<td class="st ok"><button class="ibtn sm" data-vercert="${v.user_id}|${codigoCurso(v).toUpperCase()}" title="Ver certificado: ${esc(certDe(v).nombre || "")}">📜</button></td>`
+    : `<td class="st no" title="Sin certificado para el curso ${esc(codigoCurso(v))}">❌</td>`;
+  (data || []).forEach(v => {
+    tot += +v.total; totKm += +v.km || 0;
+    tb.innerHTML += `<tr style="background:${colores[claveCurso(v)]}"><td>${v.fecha.split("-").reverse().join("/")}</td><td>${esc(v.profiles.nombre)}</td>
+      <td title="${esc(tituloRuta(v))}">${esc(textoRuta(v))}${iconoRuta(v)}</td><td${v.manual ? ' class="km-manual" title="Km manual — autorizado por coordinadora"' : ""}>${v.km}</td><td>${fmtES(+v.total)}</td>
+      ${celdaRecorte((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}${celdaObs(v)}${celdaC(v)}</tr>`;
+  });
+  const estCoord = estadoLimite(totKm), profFiltrado = $("filtro-prof").value;
+  $("total-coord").textContent = textoTotal(totKm, tot);
+  $("total-coord").className = "total" + (profFiltrado ? " limite-" + estCoord.nivel : "");
+  renderResumen(data || [], certMap, turno);
+  tb.querySelectorAll("[data-vercert]").forEach(b => b.onclick = () => verCertCoord(certMap[b.dataset.vercert]));
+  marcarRecortes(tb);
+}
+/* Resumen por profesor del periodo visible: compara actividad de un vistazo.
+   Usa los filtros de fecha y profesora de la parte superior. */
+const MESES_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const PALETA = ["#1a73e8", "#15803d", "#b45309", "#7c3aed", "#0891b2", "#dc2626", "#ca8a04", "#4d7c0f", "#0f766e", "#a21caf"];
+function pintarChart(id, cfg) {
+  if (!window.Chart) return;
+  const el = document.getElementById(id);
+  if (!el) return;
+  const previo = window.Chart.getChart(el);
+  if (previo) previo.destroy();
+  new window.Chart(el, cfg);
+}
+const baseChart = titulo => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, title: { display: true, text: titulo } } });
+async function renderResumen(viajes, certMap, turno) {
+  const box = $("resumen-coord");
+  if (!box) return;
+  const { desde, hasta } = rangoCoord(), f = $("filtro-prof").value.trim();
+  const por = {};
+  (viajes || []).forEach(v => {
+    const n = (v.profiles && v.profiles.nombre) || "?";
+    por[n] = por[n] || { viajes: 0, km: 0, total: 0, sinCert: 0, cursosSinCert: new Set() };
+    por[n].viajes++; por[n].km += +v.km || 0; por[n].total += +v.total || 0;
+    if (!certMap[`${v.user_id}|${codigoCurso(v).toUpperCase()}`]) por[n].cursosSinCert.add(codigoCurso(v));
+  });
+  Object.values(por).forEach(r => { r.sinCert = r.cursosSinCert.size; delete r.cursosSinCert; });
+  const filas = Object.entries(por).sort((a, b) => b[1].total - a[1].total);
+  if (!filas.length) { box.innerHTML = '<span class="muted">Sin datos en este periodo.</span>'; return; }
+  const maxKm = Math.max(...filas.map(([, r]) => r.km));
+  const totV = filas.reduce((a, [, r]) => a + r.viajes, 0);
+  const totK = filas.reduce((a, [, r]) => a + r.km, 0);
+  const totE = filas.reduce((a, [, r]) => a + r.total, 0);
+  const nombres = filas.map(([n]) => n);
+  const colores = nombres.map((_, i) => PALETA[i % PALETA.length]);
+  box.innerHTML = `<p class="muted">Periodo ${fmtFecha(desde)} – ${fmtFecha(hasta)}${f ? ` · profesora: «${esc(f)}»` : ""} (filtros de arriba)</p>
+    <div class="kpis">
+      <div class="kpi"><b>${filas.length}</b><span>profesores</span></div>
+      <div class="kpi"><b>${totV}</b><span>viajes</span></div>
+      <div class="kpi"><b>${Math.round(totK)} km</b><span>desplazamiento</span></div>
+      <div class="kpi"><b>${fmtES(totE)}</b><span>total</span></div>
+    </div>
+    <div class="charts">
+      <div class="chartbox"><canvas id="ch-km"></canvas></div>
+      <div class="chartbox"><canvas id="ch-euros"></canvas></div>
+      <div class="chartbox"><canvas id="ch-cursos"></canvas></div>
+      <div class="chartbox"><canvas id="ch-meses"></canvas></div>
+    </div>
+    <table class="dash"><thead><tr><th>Profesor</th><th>Viajes</th><th title="Color según el límite de 950 km: verde, amarillo desde 800, naranja desde 900, rojo al superar">Km</th><th>Total</th><th>Sin 📜</th><th></th></tr></thead><tbody>` +
+    filas.map(([n, r]) => { const e = estadoLimite(r.km); return `<tr><td>${esc(n)}</td><td>${r.viajes}</td><td class="km-limite limite-${e.nivel}" title="${esc(e.aviso)}">${Math.round(r.km)}</td>` +
+      `<td>${fmtES(r.total)}</td><td>${r.sinCert ? `<b class="alerta">${r.sinCert}</b>` : "0"}</td>` +
+      `<td class="barcell"><div class="bar" style="width:${maxKm ? Math.round(r.km / maxKm * 100) : 0}%"></div></td></tr>`; }).join("") +
+    `</tbody></table>`;
+  pintarChart("ch-km", { type: "bar", data: { labels: nombres, datasets: [{ data: filas.map(([, r]) => Math.round(r.km)), backgroundColor: colores }] }, options: baseChart("Km por profesora") });
+  pintarChart("ch-euros", { type: "doughnut", data: { labels: nombres, datasets: [{ data: filas.map(([, r]) => +r.total.toFixed(2)), backgroundColor: colores }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "right" }, title: { display: true, text: "Reparto de €" } } } });
+  // Viajes por curso (top 8 del periodo)
+  const porCurso = {};
+  (viajes || []).forEach(v => {
+    const k = (v.motivo_codigo ? v.motivo_codigo + " - " : "") + (v.motivo_curso || "Sin curso");
+    porCurso[k] = porCurso[k] || { viajes: 0, km: 0 };
+    porCurso[k].viajes++; porCurso[k].km += +v.km || 0;
+  });
+  const topC = Object.entries(porCurso).sort((a, b) => b[1].km - a[1].km).slice(0, 8);
+  pintarChart("ch-cursos", { type: "bar", data: { labels: topC.map(([k]) => k), datasets: [{ data: topC.map(([, r]) => r.viajes), backgroundColor: "#15803d" }] }, options: { ...baseChart("Viajes por curso (top 8)"), indexAxis: "y" } });
+  // Evolución de km en los últimos 6 meses (respeta el filtro de profesora)
+  const h = new Date(); const d6 = new Date(h.getFullYear(), h.getMonth() - 5, 1).toISOString().slice(0, 10);
+  const claves6 = [];
+  for (let i = 5; i >= 0; i--) { const d = new Date(h.getFullYear(), h.getMonth() - i, 1); claves6.push(d.toISOString().slice(0, 7)); }
+  let todos;
+  if (DEMO) todos = demoSeed().filter(v => v.fecha >= d6 && (!f || (perfil.nombre || "").toLowerCase().includes(f.toLowerCase())));
+  else {
+    let q = sb.from("viajes").select("fecha,km,profiles!inner(nombre)").gte("fecha", d6);
+    if (f) q = q.ilike("profiles.nombre", `%${f}%`);
+    todos = (await q).data || [];
+  }
+  if (turno !== turnoCoord) return;
+  const kmMes = Object.fromEntries(claves6.map(k => [k, 0]));
+  (todos || []).forEach(v => { const k = String(v.fecha).slice(0, 7); if (k in kmMes) kmMes[k] += +v.km || 0; });
+  pintarChart("ch-meses", { type: "line", data: { labels: claves6.map(k => MESES_ES[+k.slice(5, 7) - 1] + " " + k.slice(2, 4)), datasets: [{ data: claves6.map(k => Math.round(kmMes[k])), borderColor: "#1a73e8", backgroundColor: "#1a73e833", fill: true, tension: 0.3 }] }, options: baseChart("Km por mes (6 meses)") });
+}
+// Coordinador: abrir el certificado de un viaje en pestaña nueva
+async function verCertCoord(c) {
+  if (!c) return;
+  const win = window.open("", "_blank"); // dentro del clic para que no lo bloquee
+  if (!win) { alert("El navegador bloqueó la pestaña. Permite emergentes para este sitio."); return; }
+  try {
+    if (DEMO) win.location.href = await dataUrlABlobUrl(c.dataUrl);
+    else {
+      const { data: blob } = await sb.storage.from("certificados").download(c.path);
+      if (!blob) throw new Error("vacio");
+      win.location.href = URL.createObjectURL(blob);
+    }
+  } catch { win.close(); alert("No se pudo abrir el certificado."); }
+}
+
+/* ---------- PDF final: hoja de kilometraje + una pagina por ticket ---------- */
+function cargarImagenTicket(src) {
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im); im.onerror = rej; im.src = src;
+  });
+}
+/* PDF final: tabla kilometraje + certificados de asistencia + tickets gasolina */
+/* PDF final: hoja de kilometraje (replica del modelo oficial) + certificados + tickets.
+   Primera pagina en horizontal; anexos en vertical. */
+async function pdfHoja(prof, viajes, rango, tickets, soloDatos) {
+  viajes = viajesVisibles(viajes);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  const W = 841.89, H = 595.28, M = 24;
+  const e = v => String(v ?? "").replace(/[áéíóúñü]/gi, c => ({ á: "a", é: "e", í: "i", ó: "o", ú: "u", ñ: "n", ü: "u", Á: "A", É: "E", Í: "I", Ó: "O", Ú: "U", Ñ: "N" }[c] || c));
+  const total = (viajes || []).reduce((a, v) => a + +v.total, 0);
+  const marco = (x, y, w, h, fill) => {
+    doc.setDrawColor(60); doc.setLineWidth(0.6);
+    if (fill) { doc.setFillColor(fill[0], fill[1], fill[2]); doc.rect(x, y, w, h, "FD"); }
+    else doc.rect(x, y, w, h);
+  };
+  // Texto encogido si no cabe en la celda
+  const celdaTxt = (txt, x, y, w, size, bold, align) => {
+    txt = String(txt ?? "");
+    doc.setFont("helvetica", bold ? "bold" : "normal");
+    let s = size;
+    doc.setFontSize(s);
+    while (s > 5.5 && doc.getTextWidth(txt) > w - 4) { s -= 0.5; doc.setFontSize(s); }
+    doc.text(txt, align === "center" ? x + w / 2 : align === "right" ? x + w - 2 : x + 2, y, { align: align || "left" });
+  };
+  // Logo del grupo arriba a la derecha (incrustado en logo.js; respaldo: logo.png)
+  try {
+    let L = null;
+    if (window.LOGO_DATAURL) L = { jpg: window.LOGO_DATAURL, w: window.LOGO_W || 700, h: window.LOGO_H || 180 };
+    else L = logoADataUrl(await cargarImagenTicket("logo.png?v=20260918"));
+    const lw = 130, lh = lw * L.h / L.w;
+    doc.addImage(L.jpg, "JPEG", W - M - lw, 20, lw, lh);
+  } catch (err) { if (window.console) console.warn("Logo no disponible:", err); }
+  // Bloque de datos + Codigo/Hoja + Importe
+  const iy = 76, rh = 14, labW = 68, valW = 210;
+  [["Trabajador", e(prof.nombre || "")], ["N.I.F.", prof.nif || ""], ["Categoria", e(prof.categoria || "")],
+   ["Proyecto", e(prof.proyecto || "")], ["Fecha", `${fmtFecha(rango.desde)} - ${fmtFecha(rango.hasta)}`]
+  ].forEach(([lab, val], i) => {
+    const y = iy + i * rh;
+    marco(M, y, labW, rh); marco(M + labW, y, valW, rh);
+    celdaTxt(e(lab), M, y + 10, labW, 8, false, "left");
+    celdaTxt(val, M + labW, y + 10, valW, 8, true, "left");
+  });
+  doc.setFont("helvetica", "bold"); doc.setFontSize(12);
+  doc.text("Importe", W / 2, iy + 2 * rh, { align: "center" });
+  const rx = W - M - 150, ry = 90; // debajo del logo para no solaparse
+  marco(rx, ry, 60, rh); marco(rx + 60, ry, 90, rh);
+  celdaTxt("Codigo", rx, ry + 10, 60, 8, false, "left");
+  marco(rx, ry + rh, 150, rh);
+  celdaTxt("Hoja 1", rx, ry + 2 * rh - 4, 150, 8, false, "center");
+  // Tabla: Fecha | Desplazamiento | Km Euros TOTAL | Motivo | Estancia | Comida | Total
+  const anchos = [64, 150, 36, 44, 56, 199, 46, 46, 46, 46, 60];
+  const X = i => M + anchos.slice(0, i).reduce((a, b) => a + b, 0);
+  const ty = iy + 5 * rh + 8, h1 = 15, h2 = 12, h3 = 12, rhB = 13;
+  const dibujarCabecera = y0 => {
+    marco(X(2), y0, X(6) - X(2), h1); celdaTxt("Desplazamiento", X(2), y0 + 11, X(6) - X(2), 9, true, "center");
+    marco(X(6), y0, X(8) - X(6), h1); celdaTxt("Estancia", X(6), y0 + 11, X(8) - X(6), 9, true, "center");
+    marco(X(8), y0, X(10) - X(8), h1); celdaTxt("Comida", X(8), y0 + 11, X(10) - X(8), 9, true, "center");
+    marco(X(10), y0, anchos[10], h1 + h2 + h3); celdaTxt("Total", X(10), y0 + (h1 + h2 + h3) / 2 + 3, anchos[10], 9, true, "center");
+    const y1 = y0 + h1;
+    [["", 0], ["", 1]].forEach(([t, i]) => { marco(X(i), y1, anchos[i], h2); });
+    marco(X(2), y1, X(5) - X(2), h2); celdaTxt("Gasolina", X(2), y1 + 9, X(5) - X(2), 8, true, "center");
+    for (let ci = 5; ci <= 9; ci++) marco(X(ci), y1, anchos[ci], h2); // Motivo/Poblac./Euros solo en la linea inferior, sin repetir
+    const y2 = y1 + h2;
+    ["Fecha", "Desplazamiento", "Km.", "Euros", "TOTAL", "Motivo", "Poblac.", "Euros", "Poblac.", "Euros"].forEach((t, i) => {
+      marco(X(i), y2, anchos[i], h3);
+      if (t) celdaTxt(t, X(i), y2 + 9, anchos[i], 7.5, true, "center");
+    });
+    return y2 + h3;
+  };
+  // En el PDF los viajes van por fecha pero juntando los del mismo curso:
+  // cada curso aparece donde cae su primer viaje y dentro, por fecha; mismo pastel por grupo
+  const ordenados = ordenarComoPdf(viajes);
+  const BANDAS = [[223, 239, 251], [228, 223, 241], [241, 221, 230], [253, 236, 213], [224, 239, 220], [255, 245, 208], [224, 239, 239], [240, 228, 240]];
+  let bi = -1, lastKey = " ";
+  const filasBody = ordenados.map(v => {
+    const key = `${v.motivo_codigo || ""}|${v.motivo_curso || ""}`;
+    if (key !== lastKey) { lastKey = key; bi = (bi + 1) % BANDAS.length; }
+    return { v, band: BANDAS[bi], key };
+  });
+  const pieReserva = 100, SEP = 5; // hueco blanco entre cursos distintos
+  let y = dibujarCabecera(ty);
+  filasBody.forEach((f, idx) => {
+    if (idx > 0 && f.key !== filasBody[idx - 1].key) y += SEP; // separar cursos
+    if (y + rhB > H - M - pieReserva) { doc.addPage("a4", "l"); y = dibujarCabecera(ty); }
+    const v = f.v;
+      const vals = [
+        [fmtFecha(v.fecha), "center"], [e(textoRutaPDF(v)), "left"],
+        [String(v.km), "center"], [`${String(v.precio_km).replace(".", ",")} €`, "center"],
+        [fmtES(+v.total), "center"], [e(`${v.motivo_codigo ? v.motivo_codigo + " - " : ""}${v.motivo_curso || ""}`), "center"],
+        ["", "center"], ["", "center"], ["", "center"], ["", "center"], [fmtES(+v.total), "center"],
+      ];
+      vals.forEach(([t, al], i) => {
+        doc.setFillColor(f.band[0], f.band[1], f.band[2]);
+        doc.setDrawColor(60); doc.setLineWidth(0.6);
+        doc.rect(X(i), y, anchos[i], rhB, "FD");
+        if (t) celdaTxt(t, X(i), y + 9.5, anchos[i], 7.5, false, al);
+      });
+      y += rhB;
+    });
+    const totY = y + 18;
+  doc.setFont("helvetica", "bold"); doc.setFontSize(10);
+  doc.text(fmtES(total), X(10) + anchos[10] / 2, totY, { align: "center" });
+  doc.setFontSize(8);
+  const pieY = H - M - 82; // firmas al pie de la hoja
+  doc.text("FIRMA DEL TRABAJADOR", M, pieY);
+  const ax = W - M - 340;
+  doc.text("AUTORIZADO POR", ax, pieY);
+  doc.setDrawColor(60); doc.setLineWidth(0.6);
+  // Firma de Mara (debajo: el marco del recuadro se dibuja encima para que no se rompa)
+  try {
+    let F = null;
+    if (window.FIRMA_DATAURL) F = { jpg: window.FIRMA_DATAURL, w: window.FIRMA_W || 286, h: window.FIRMA_H || 192 };
+    else F = logoADataUrl(await cargarImagenTicket("firma-mara.jpg?v=20260922"));
+    const fk = Math.min(328 / F.w, 84 / F.h), fw = F.w * fk, fh = F.h * fk;
+    doc.addImage(F.jpg, "JPEG", ax + (340 - fw) / 2, pieY + 8 + (54 - fh) / 2, fw, fh);
+  } catch (err) { if (window.console) console.warn("Firma no disponible:", err); }
+  doc.rect(M, pieY + 8, 340, 54);
+  doc.rect(ax, pieY + 8, 340, 54);
+  const anexos = tickets && tickets.certs ? tickets : { certs: [], tickets: tickets || [] };
+  // 1) Un certificado por código de curso, cada uno una sola vez.
+  for (const v of cursosUnicos(viajes)) {
+    const cod = codigoCurso(v).toUpperCase();
+    const c = (anexos.certs || []).find(x => String(x.curso_codigo || "").toUpperCase() === cod);
+    if (!c) continue;
+    let paginas = [];
+    try { paginas = c.tipo === "pdf" ? await pdfAPaginas(c.src) : [await imagenNormalizada(c.src)]; }
+    catch { paginas = []; }
+    if (!paginas.length) { doc.addPage("a4", "p"); doc.setFontSize(11); doc.text(e(`No se pudo incluir el certificado: ${c.nombre || ""}`).slice(0, 100), 40, 60); continue; }
+    paginas.forEach((pg, p) => paginaAnexo(doc, pg.jpg, pg.w, pg.h,
+      e(`Certificado de asistencia - curso ${v.motivo_codigo || cod} ${v.motivo_curso || ""}` + (paginas.length > 1 ? ` (pag. ${p + 1}/${paginas.length})` : "")).slice(0, 110)));
+  }
+  // 2) Tickets de gasolina, una pagina por ticket
+  const listaT = anexos.tickets || [];
+  for (let i = 0; i < listaT.length; i++) {
+    const t = listaT[i];
+    const tv = (viajes || []).find(x => String(x.id) === String(t.viaje_id));
+    const ref = tv ? `${fmtFecha(tv.fecha)} ${textoRutaPDF(tv)}` : "general del periodo";
+    const esPdf = (t.tipo || "").includes("pdf") || /\.pdf$/i.test(t.nombre || "");
+    try {
+      const paginas = esPdf ? await pdfAPaginas(t.src) : [await imagenNormalizada(t.src)];
+      if (!paginas.length) throw new Error("vacio");
+      const baseTick = `Ticket ${i + 1}/${listaT.length} - ${ref} - ${t.nombre || ""}`;
+      paginas.forEach((pg, p) => paginaAnexo(doc, pg.jpg, pg.w, pg.h,
+        e(baseTick + (paginas.length > 1 ? ` (pag. ${p + 1}/${paginas.length})` : "")).slice(0, 110)));
+    } catch { doc.addPage("a4", "p"); doc.setFontSize(11); doc.text(e(`No se pudo incluir el ticket: ${t.nombre || ""}`).slice(0, 100), 40, 60); }
+  }
+  const nombrePdf = `HojaKm_${rango.desde}_${rango.hasta}_${prof.nombre || "hoja"}.pdf`;
+  const dataUri = doc.output("datauristring");
+  const tamMB = (dataUri.length * 3 / 4) / 1048576;
+  if (soloDatos) return { nombrePdf, dataUri, tamMB };
+  if (tamMB > 8) alert(`El PDF pesa ${tamMB.toFixed(1)} MB por los anexos. Se descarga igual, pero conviene borrar de la nube los ficheros de meses ya cerrados para no llenar el almacenamiento gratuito.`);
+  doc.save(nombrePdf);
+}
+
+// Sin Supabase configurado (tu caso ahora): entra en demo.
+// Con Supabase: intenta sesion, si no hay, muestra login.
+if (DEMO) entrarDemo(); else arrancarUnaVez();
