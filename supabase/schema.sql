@@ -35,12 +35,25 @@ create table if not exists public.viajes (
   proveedor text default '',
   tipo_ruta text not null default 'ida_vuelta' check (tipo_ruta in ('ida','ida_vuelta')),
   oculto boolean not null default false,
+  validado text not null default 'pendiente' check (validado in ('pendiente','si','no')),
   created_at timestamptz default now()
 );
 
 -- Migración segura para bases ya existentes: los viajes anteriores eran ida y vuelta.
 alter table public.viajes add column if not exists tipo_ruta text not null default 'ida_vuelta';
 alter table public.viajes add column if not exists oculto boolean not null default false;
+alter table public.viajes add column if not exists validado text not null default 'pendiente';
+do $$
+begin
+  if exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.viajes'::regclass and conname = 'viajes_validado_check'
+  ) then
+    alter table public.viajes drop constraint viajes_validado_check;
+  end if;
+end $$;
+alter table public.viajes add constraint viajes_validado_check
+  check (validado in ('pendiente','si','no'));
 do $$
 begin
   if exists (
