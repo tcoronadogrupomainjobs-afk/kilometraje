@@ -85,7 +85,14 @@ th.sortable:hover{background:#1e3a5f}
 #t-coord th:nth-child(5),#t-coord td:nth-child(5){width:88px}
 #t-coord th:nth-child(6),#t-coord td:nth-child(6){width:18%}
 #t-coord th:nth-child(7),#t-coord td:nth-child(7){width:11%}
-#t-coord th:last-child,#t-coord td:last-child{width:66px}
+#t-coord th:last-child,#t-coord td:last-child{width:130px}
+#t-coord th:nth-child(8),#t-coord td:nth-child(8){width:66px}
+/* Validado: desplegable con estado Sí / No / Pendiente */
+.celda-validado{text-align:center}
+.sel-validado{padding:4px 6px;font-size:13px;font-weight:700;border-radius:8px;width:100%}
+.sel-validado.v-si,.celda-validado.v-si .sel-validado{border-color:#9bd3ac;background:var(--ok-bg);color:var(--ok)}
+.sel-validado.v-no,.celda-validado.v-no .sel-validado{border-color:#efb4b4;background:var(--bad-bg);color:var(--bad)}
+.sel-validado.v-pendiente,.celda-validado.v-pendiente .sel-validado{border-color:#e8cf7a;background:#fff8d6;color:#8a6100}
 /* En pantallas estrechas scroll horizontal en vez de recortar botones */
 .tabla-scroll{overflow-x:auto;margin-top:8px;border:1px solid var(--line);border-radius:10px}
 .tabla-scroll table{margin-top:0;border:none;border-radius:0;min-width:1150px}

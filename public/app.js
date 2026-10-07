@@ -448,7 +448,7 @@ async function cargarProf() {
     const mismoDia = (DEMO ? demoSeed() : ((await sb.from("viajes").select("id").eq("motivo_codigo", v.motivo_codigo || "").eq("fecha", nueva)).data || []));
     if (mismoDia.some(x => String(x.id) !== String(v.id)) && !confirm(`Ya hay un viaje del curso ${v.motivo_codigo || ""} el ${nueva}. ¿Duplicarlo igualmente?`)) return;
     const { id: _id, created_at: _c, ...copia } = v;
-    const registro = { ...copia, fecha: nueva, total: +(+copia.km * precioKm).toFixed(2), precio_km: precioKm, oculto: false };
+    const registro = { ...copia, fecha: nueva, total: +(+copia.km * precioKm).toFixed(2), precio_km: precioKm, oculto: false, validado: "pendiente" };
     if (DEMO) {
       const todos = demoSeed();
       todos.push({ id: Date.now() + Math.floor(Math.random() * 1e6), user_id: perfil.id, ...registro });
@@ -1320,7 +1320,8 @@ function exportarCoordExcel() {
     "Código": v.motivo_codigo || "",
     "Curso": v.motivo_curso || "",
     "Observaciones": v.observaciones || "",
-    "Certificado": ultimosCertMap[`${v.user_id}|${codigoCurso(v).toUpperCase()}`] ? "Sí" : "No"
+    "Certificado": ultimosCertMap[`${v.user_id}|${codigoCurso(v).toUpperCase()}`] ? "Sí" : "No",
+    "Validado": { pendiente: "Pendiente", si: "Sí", no: "No" }[(v.validado || "pendiente").trim().toLowerCase()] || "Pendiente"
   }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas), "Viajes");
@@ -1574,17 +1575,35 @@ async function cargarCoord() {
   const celdaC = v => certDe(v)
     ? `<td class="st ok"><button class="ibtn sm" data-vercert="${v.user_id}|${codigoCurso(v).toUpperCase()}" title="Ver certificado: ${esc(certDe(v).nombre || "")}">📜</button></td>`
     : `<td class="st no" title="Sin certificado para el curso ${esc(codigoCurso(v))}">❌</td>`;
+  // Validación del viaje por la coordinadora: Sí / No / Pendiente
+  const OPCIONES_VALIDADO = [
+    ["pendiente", "⏳ Pendiente"], ["si", "✅ Sí"], ["no", "❌ No"],
+  ];
+  const celdaValidado = v => {
+    const actual = (v.validado || "pendiente").trim().toLowerCase();
+    const opciones = OPCIONES_VALIDADO.map(([valor, texto]) =>
+      `<option value="${valor}"${actual === valor ? " selected" : ""}>${texto}</option>`).join("");
+    return `<td class="celda-validado v-${actual === "si" ? "si" : actual === "no" ? "no" : "pendiente"}"><select class="sel-validado" data-validar="${v.id}" title="Estado de validación">${opciones}</select></td>`;
+  };
   (data || []).forEach(v => {
     tot += +v.total; totKm += +v.km || 0;
     tb.innerHTML += `<tr style="background:${colores[claveCurso(v)]}"><td>${v.fecha.split("-").reverse().join("/")}</td><td>${esc(v.profiles.nombre)}</td>
       <td title="${esc(tituloRuta(v))}">${esc(textoRuta(v))}${iconoRuta(v)}</td><td${v.manual ? ' class="km-manual" title="Km manual — autorizado por coordinadora"' : ""}>${v.km}</td><td>${fmtES(+v.total)}</td>
-      ${celdaRecorte((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}${celdaObs(v)}${celdaC(v)}</tr>`;
+      ${celdaRecorte((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}${celdaObs(v)}${celdaC(v)}${celdaValidado(v)}</tr>`;
   });
   const estCoord = estadoLimite(totKm), profFiltrado = $("filtro-prof").value;
   $("total-coord").textContent = textoTotal(totKm, tot);
   $("total-coord").className = "total" + (profFiltrado ? " limite-" + estCoord.nivel : "");
   renderResumen(data || [], certMap, turno);
   tb.querySelectorAll("[data-vercert]").forEach(b => b.onclick = () => verCertCoord(certMap[b.dataset.vercert]));
+  tb.querySelectorAll("[data-validar]").forEach(s => s.onchange = async () => {
+    const valor = s.value;
+    if (DEMO) { const todos = demoSeed(); const x = todos.find(y => String(y.id) === String(s.dataset.validar)); if (x) x.validado = valor; demoGuardar(todos); }
+    else { const { error } = await sb.from("viajes").update({ validado: valor }).eq("id", s.dataset.validar); if (error) { alert(error.message); return; } }
+    const td = s.closest("td");
+    if (td) td.className = "celda-validado v-" + valor;
+    cargarCoord();
+  });
   marcarRecortes(tb);
 }
 /* Resumen por profesor del periodo visible: compara actividad de un vistazo.
