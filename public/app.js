@@ -1033,7 +1033,12 @@ $("f-tickets").onchange = async ev => {
         catch { alert("Ticket demasiado grande para la demo (límite del navegador). Se incluye igualmente en este PDF si no recargas."); }
       } else {
         // Se sube la versión comprimida (~200-400 KB) o el PDF original para no llenar el GB gratuito
-        const path = `${perfil.id}/${fTicket.slice(0, 7)}/${Date.now()}_${nombrePath}`;
+        // Supabase no admite espacios ni caracteres raros en la clave: se limpia el nombre
+        const nombreLimpio = nombrePath.replace(/\.[a-z0-9]+$/i, "")
+          .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+          .replace(/[^A-Za-z0-9._-]+/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "") || "ticket";
+        const extT = (nombrePath.match(/\.[a-z0-9]+$/i) || [""])[0];
+        const path = `${perfil.id}/${fTicket.slice(0, 7)}/${Date.now()}_${nombreLimpio}${extT}`;
         const { error: e1 } = await sb.storage.from("tickets").upload(path, contenido, { contentType: tipoSubida });
         if (e1) { alert("Error subiendo " + file.name + ": " + e1.message); continue; }
         const { error: e2 } = await sb.from("tickets").insert({ user_id: perfil.id, mes: fTicket.slice(0, 7), fecha: fTicket, nombre: file.name, path, viaje_id: null });
@@ -1147,7 +1152,12 @@ async function subirCert(cursoCodigo, file) {
       alert("Ese PDF pesa más de 5 MB y ocupa bastante del almacenamiento gratuito. Si puedes, escanéalo a menor resolución.");
     }
     const carpetaCurso = codigo.replace(/[^A-Z0-9_-]/g, "_");
-    const path = `${perfil.id}/cursos/${carpetaCurso}/${Date.now()}_${nombrePath}`;
+    // Supabase no admite espacios ni caracteres raros en la clave: se limpia el nombre
+    const nombreLimpio = nombrePath.replace(/\.[a-z0-9]+$/i, m => m)
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-Za-z0-9._-]+/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "") || "cert";
+    const ext = (nombrePath.match(/\.[a-z0-9]+$/i) || [""])[0];
+    const path = `${perfil.id}/cursos/${carpetaCurso}/${Date.now()}_${nombreLimpio}${ext}`;
     const { error: e1 } = await sb.storage.from("certificados").upload(path, blobSubir, { contentType: tipoSubida });
     if (e1) { alert("Error subiendo: " + e1.message); return; }
     const { error: e2 } = await sb.from("certificados").insert({ user_id: perfil.id, curso_codigo: codigo, nombre: file.name, path, tipo: esPdf ? "pdf" : "img" });
@@ -1680,12 +1690,6 @@ async function renderResumen(viajes, certMap, turno, allProfs=[]) {
       <div class="kpi"><b>${Math.round(totK)} km</b><span>desplazamiento</span></div>
       <div class="kpi"><b>${fmtES(totE)}</b><span>total</span></div>
     </div>
-    <div class="charts">
-      <div class="chartbox"><canvas id="ch-km"></canvas></div>
-      <div class="chartbox"><canvas id="ch-euros"></canvas></div>
-      <div class="chartbox"><canvas id="ch-cursos"></canvas></div>
-      <div class="chartbox"><canvas id="ch-meses"></canvas></div>
-    </div>
     <table class="dash"><thead><tr><th>Profesor</th><th>Viajes</th><th title="Color según el límite de 950 km: verde, amarillo desde 800, naranja desde 900, rojo al superar">Km</th><th>Total</th><th>Sin 📜</th><th></th></tr></thead><tbody>` +
     filas.map(([n, r]) => {
       const e = estadoLimite(r.km);
@@ -1694,8 +1698,14 @@ async function renderResumen(viajes, certMap, turno, allProfs=[]) {
       return `<tr><td>${nombreCelda}</td><td>${r.viajes}</td><td class="km-limite limite-${e.nivel}" title="${esc(e.aviso)}">${Math.round(r.km)}</td>` +
       `<td>${fmtES(r.total)}</td><td>${r.sinCert ? `<b class="alerta">${r.sinCert}</b>` : "0"}</td>` +
       `<td class="barcell"><div class="bar" style="width:${maxKm ? Math.round(r.km / maxKm * 100) : 0}%"></div></td></tr>`; }).join("") +
-    `</tbody></table>`;
-  pintarChart("ch-km", { type: "bar", data: { labels: nombres, datasets: [{ data: filas.map(([, r]) => Math.round(r.km)), backgroundColor: colores }] }, options: baseChart("Km por profesora") });
+    `</tbody></table>
+    <div class="charts">
+      <div class="chartbox"><canvas id="ch-km"></canvas></div>
+      <div class="chartbox"><canvas id="ch-euros"></canvas></div>
+      <div class="chartbox"><canvas id="ch-cursos"></canvas></div>
+      <div class="chartbox"><canvas id="ch-meses"></canvas></div>
+    </div>`;
+  pintarChart("ch-km", { type: "bar", data: { labels: nombres, datasets: [{ data: filas.map(([, r]) => Math.round(r.km)), backgroundColor: colores }] }, options: baseChart("Km por profesor") });
   pintarChart("ch-euros", { type: "doughnut", data: { labels: nombres, datasets: [{ data: filas.map(([, r]) => +r.total.toFixed(2)), backgroundColor: colores }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "right" }, title: { display: true, text: "Reparto de €" } } } });
   // Viajes por curso (top 8 del periodo)
   const porCurso = {};
