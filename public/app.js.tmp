@@ -1618,9 +1618,7 @@ async function cargarCoord() {
   const estCoord = estadoLimite(totKm), profFiltrado = $("filtro-prof").value;
   $("total-coord").textContent = textoTotal(totKm, tot);
   $("total-coord").className = "total" + (profFiltrado ? " limite-" + estCoord.nivel : "");
-  const allProfs = DEMO ? [perfil.nombre]
-    : ((await sb.from('profiles').select('nombre').eq('rol', 'profesor').order('nombre')).data || []).map(p => p.nombre);
-  renderResumen(data || [], certMap, turno, allProfs);
+  renderResumen(data || [], certMap, turno);
   tb.querySelectorAll("[data-vercert]").forEach(b => b.onclick = () => verCertCoord(certMap[b.dataset.vercert]));
 tb.querySelectorAll("[data-validar]").forEach(s => s.onchange = async () => {
       const valor = s.value;
@@ -1649,7 +1647,7 @@ function pintarChart(id, cfg) {
   new window.Chart(el, cfg);
 }
 const baseChart = titulo => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, title: { display: true, text: titulo } } });
-async function renderResumen(viajes, certMap, turno, allProfs=[]) {
+async function renderResumen(viajes, certMap, turno) {
   const box = $("resumen-coord");
   if (!box) return;
   const { desde, hasta } = rangoCoord(), f = $("filtro-prof").value.trim();
@@ -1659,10 +1657,6 @@ async function renderResumen(viajes, certMap, turno, allProfs=[]) {
     por[n] = por[n] || { viajes: 0, km: 0, total: 0, sinCert: 0, cursosSinCert: new Set() };
     por[n].viajes++; por[n].km += +v.km || 0; por[n].total += +v.total || 0;
     if (!certMap[`${v.user_id}|${codigoCurso(v).toUpperCase()}`]) por[n].cursosSinCert.add(codigoCurso(v));
-  });
-  // Incluir todos los profesores (incluso sin viajes)
-  allProfs.forEach(n => {
-    if (!por[n]) por[n] = { viajes: 0, km: 0, total: 0, sinCert: 0, cursosSinCert: new Set() };
   });
   Object.values(por).forEach(r => { r.sinCert = r.cursosSinCert.size; delete r.cursosSinCert; });
   const filas = Object.entries(por).sort((a, b) => b[1].total - a[1].total);
@@ -1687,11 +1681,7 @@ async function renderResumen(viajes, certMap, turno, allProfs=[]) {
       <div class="chartbox"><canvas id="ch-meses"></canvas></div>
     </div>
     <table class="dash"><thead><tr><th>Profesor</th><th>Viajes</th><th title="Color según el límite de 950 km: verde, amarillo desde 800, naranja desde 900, rojo al superar">Km</th><th>Total</th><th>Sin 📜</th><th></th></tr></thead><tbody>` +
-    filas.map(([n, r]) => {
-      const e = estadoLimite(r.km);
-      const sinViajes = r.viajes === 0;
-      const nombreCelda = `<span class="sin-viajes ${sinViajes ? 'rojo' : ''}">${esc(n)}${sinViajes ? '' : ''}</span>`;
-      return `<tr><td>${nombreCelda}</td><td>${r.viajes}</td><td class="km-limite limite-${e.nivel}" title="${esc(e.aviso)}">${Math.round(r.km)}</td>` +
+    filas.map(([n, r]) => { const e = estadoLimite(r.km); return `<tr><td>${esc(n)}</td><td>${r.viajes}</td><td class="km-limite limite-${e.nivel}" title="${esc(e.aviso)}">${Math.round(r.km)}</td>` +
       `<td>${fmtES(r.total)}</td><td>${r.sinCert ? `<b class="alerta">${r.sinCert}</b>` : "0"}</td>` +
       `<td class="barcell"><div class="bar" style="width:${maxKm ? Math.round(r.km / maxKm * 100) : 0}%"></div></td></tr>`; }).join("") +
     `</tbody></table>`;

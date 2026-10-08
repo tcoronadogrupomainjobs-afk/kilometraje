@@ -129,6 +129,9 @@ td.km-limite.limite-rojo{color:var(--bad);background:var(--bad-bg)}
 .muted{color:var(--mut);font-size:13px}
 .error{color:var(--bad);font-weight:700}
 .nota{color:#fff;background:var(--bad);font-size:13px;font-weight:700;padding:2px 10px;border-radius:999px;width:fit-content;white-space:nowrap}
+.sin-viajes{font-weight:bold}
+.sin-viajes.rojo{color:var(--bad);font-weight:800}
+.sin-viajes.rojo::after{content:" 🔪";font-size:1.1em;vertical-align:middle}
 .lab-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .live{color:var(--ok);font-size:13px;font-weight:700}
 .live::before{content:"";display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--ok);margin-right:5px;animation:blink 1.6s infinite}
