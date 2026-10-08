@@ -343,15 +343,20 @@ function entrarDemo() {
   $("f-imp-coord").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importarCoordExcel(f); };
   $("btn-precio").onclick = () => { precioKm = parseFloat($("precio").value.replace(",", ".")) || 0.26; localStorage.setItem("km_precio", String(precioKm)); alert("Precio demo: " + precioKm.toFixed(2) + " €/km"); };
   $("btn-pdf-coord").onclick = async () => {
-    const { desde, hasta } = rangoCoord();
-    const v = viajesVisibles(demoFiltrarRango(desde, hasta));
-    if (!v.length) { alert("No hay viajes operativos en ese periodo."); return; }
-    const kmPeriodo = v.reduce((a, x) => a + (+x.km || 0), 0);
-    if (kmPeriodo > LIMITE_KM_PERIODO && !confirm(`El periodo supera el límite de ${LIMITE_KM_PERIODO} km (${Math.round(kmPeriodo)} km). ¿Generar el PDF igualmente?`)) return;
-    const certs = await listarCerts(v);
-    const sin = faltanCerts(v, certs);
-    if (sin.length && !confirm(`Hay ${sin.length} curso(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
-    await pdfHoja(perfil, v, { desde, hasta }, { certs, tickets: await listarTickets(desde, hasta) });
+    try {
+      const { desde, hasta } = rangoCoord();
+      const v = viajesVisibles(demoFiltrarRango(desde, hasta));
+      if (!v.length) { alert("No hay viajes operativos en ese periodo."); return; }
+      const kmPeriodo = v.reduce((a, x) => a + (+x.km || 0), 0);
+      if (kmPeriodo > LIMITE_KM_PERIODO && !confirm(`El periodo supera el límite de ${LIMITE_KM_PERIODO} km (${Math.round(kmPeriodo)} km). ¿Generar el PDF igualmente?`)) return;
+      const certs = await listarCerts(v);
+      const sin = faltanCerts(v, certs);
+      if (sin.length && !confirm(`Hay ${sin.length} curso(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
+      await pdfHoja(perfil, v, { desde, hasta }, { certs, tickets: await listarTickets(desde, hasta) });
+    } catch (err) {
+      console.error(err);
+      alert("Error al generar el PDF: " + (err && err.message ? err.message : err));
+    }
   };
   cargarProf(); cargarCoord(); pintarTablon(); listarAnunciosCoord();
 }
@@ -545,8 +550,10 @@ function pintarOrden() {
     el.innerHTML = etiqueta + (est && est.campo === campo ? (est.dir === 1 ? " ▲" : " ▼") : "");
   });
 }
-/* Criterio del PDF: por fecha juntando cada curso donde cae su primer viaje */
-const claveCurso = v => `${v.motivo_codigo || ""}|${v.motivo_curso || ""}`;
+/* Criterio del PDF: por código de curso, en el orden de la primera fecha de cada código.
+   La clave usa solo el código normalizado: el nombre puede variar (mayúsculas, espacios)
+   y no debe partir el grupo. */
+const claveCurso = v => codigoCurso(v) || "(sin codigo)";
 // Un curso se identifica exclusivamente por su código, sin espacios ni mayúsculas.
 const codigoCurso = v => String(v && v.motivo_codigo || "").trim().replace(/\s+/g, "").toUpperCase();
 const cursosUnicos = viajes => {
@@ -570,6 +577,8 @@ function ordenarComoPdf(viajes) {
   (viajes || []).forEach(v => { const k = claveCurso(v); if (!primera[k] || String(v.fecha) < primera[k]) primera[k] = String(v.fecha); });
   return [...(viajes || [])].sort((a, b) =>
     String(primera[claveCurso(a)]).localeCompare(String(primera[claveCurso(b)])) ||
+    // Misma primera fecha: desempata por código para no entremezclar cursos
+    claveCurso(a).localeCompare(claveCurso(b), "es", { numeric: true }) ||
     String(a.fecha).localeCompare(String(b.fecha)));
 }
 // Mismo color por curso que en el PDF (pasteles RGB -> CSS)
@@ -577,7 +586,9 @@ const BANDAS_CSS = ["#dfeffb", "#e4dff1", "#f1dde6", "#fdecd5", "#e0efdc", "#fff
 function mapaColoresCursos(viajes) {
   const primera = {};
   (viajes || []).forEach(v => { const k = claveCurso(v); if (!primera[k] || String(v.fecha) < primera[k]) primera[k] = String(v.fecha); });
-  const claves = [...new Set((viajes || []).map(claveCurso))].sort((a, b) => String(primera[a]).localeCompare(String(primera[b])));
+  const claves = [...new Set((viajes || []).map(claveCurso))].sort((a, b) =>
+    String(primera[a]).localeCompare(String(primera[b])) ||
+    a.localeCompare(b, "es", { numeric: true }));
   const mapa = {};
   claves.forEach((k, i) => mapa[k] = BANDAS_CSS[i % BANDAS_CSS.length]);
   return mapa;
@@ -597,7 +608,14 @@ $("th-motivo-prof").onclick = () => { agrupProf = false; syncAgrup(); alternarOr
 $("th-fecha-coord").onclick = () => { agrupCoord = false; syncAgrup(); alternarOrden(ordenCoord, "fecha", cargarCoord); };
 $("th-motivo-coord").onclick = () => { agrupCoord = false; syncAgrup(); alternarOrden(ordenCoord, "motivo", cargarCoord); };
 $("btn-agrup-prof").onclick = () => { agrupProf = !agrupProf; syncAgrup(); cargarProf(); };
-$("btn-agrup-coord").onclick = () => { agrupCoord = !agrupCoord; syncAgrup(); cargarCoord(); };
+$("btn-agrup-coord").onclick = () => {
+    try {
+      agrupCoord = !agrupCoord; syncAgrup(); cargarCoord();
+    } catch (err) {
+      console.error(err);
+      alert("Error al agrupar: " + (err && err.message ? err.message : err));
+    }
+  };
 pintarOrden();
 // Poblaciones con primera letra en mayuscula ("Velilla de la Sierra"),
 // respetando preposiciones/articulos en minuscula. El PDF sigue en mayusculas como el modelo.
@@ -1518,20 +1536,25 @@ async function initCoord() {
     if (!error) { precioKm = +v; alert("Precio actualizado."); }
   };
   $("btn-pdf-coord").onclick = async () => {
-    const { desde, hasta } = rangoCoord();
-    const p = await profFiltroCoord();
-    if (!p) return;
-    const uid = p.id;
-    const { data: v } = await sb.from("viajes").select("*").eq("user_id", uid).gte("fecha", desde).lte("fecha", hasta).order("fecha");
-    if (!v?.length) { alert("Sin viajes en ese periodo."); return; }
-    v = viajesVisibles(v);
-    if (!v.length) { alert("No hay viajes operativos en ese periodo."); return; }
-    const kmPeriodo = v.reduce((a, x) => a + (+x.km || 0), 0);
-    if (kmPeriodo > LIMITE_KM_PERIODO && !confirm(`El periodo supera el límite de ${LIMITE_KM_PERIODO} km (${Math.round(kmPeriodo)} km). ¿Generar el PDF igualmente?`)) return;
-    const certs = await listarCerts(v, uid);
-    const sin = faltanCerts(v, certs);
-    if (sin.length && !confirm(`Hay ${sin.length} curso(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
-    await pdfHoja(p, v, { desde, hasta }, { certs, tickets: await listarTickets(desde, hasta, uid) });
+    try {
+      const { desde, hasta } = rangoCoord();
+      const p = await profFiltroCoord();
+      if (!p) return;
+      const uid = p.id;
+      let { data: v } = await sb.from("viajes").select("*").eq("user_id", uid).gte("fecha", desde).lte("fecha", hasta).order("fecha");
+      if (!v?.length) { alert("Sin viajes en ese periodo."); return; }
+      v = viajesVisibles(v);
+      if (!v.length) { alert("No hay viajes operativos en ese periodo."); return; }
+      const kmPeriodo = v.reduce((a, x) => a + (+x.km || 0), 0);
+      if (kmPeriodo > LIMITE_KM_PERIODO && !confirm(`El periodo supera el límite de ${LIMITE_KM_PERIODO} km (${Math.round(kmPeriodo)} km). ¿Generar el PDF igualmente?`)) return;
+      const certs = await listarCerts(v, uid);
+      const sin = faltanCerts(v, certs);
+      if (sin.length && !confirm(`Hay ${sin.length} curso(s) sin certificado de asistencia. ¿Generar el PDF igualmente?`)) return;
+      await pdfHoja(p, v, { desde, hasta }, { certs, tickets: await listarTickets(desde, hasta, uid) });
+    } catch (err) {
+      console.error(err);
+      alert("Error al generar el PDF: " + (err && err.message ? err.message : err));
+    }
   };
   await cargarCoord();
   listarAnunciosCoord();
@@ -1544,7 +1567,8 @@ async function initCoord() {
     .subscribe();
 }
 async function cargarCoord() {
-  const turno = ++turnoCoord;
+  try {
+    const turno = ++turnoCoord;
   const { desde, hasta } = rangoCoord(), f = $("filtro-prof").value.trim().toLowerCase();
   let data;
   if (DEMO) {
@@ -1596,15 +1620,19 @@ async function cargarCoord() {
   $("total-coord").className = "total" + (profFiltrado ? " limite-" + estCoord.nivel : "");
   renderResumen(data || [], certMap, turno);
   tb.querySelectorAll("[data-vercert]").forEach(b => b.onclick = () => verCertCoord(certMap[b.dataset.vercert]));
-  tb.querySelectorAll("[data-validar]").forEach(s => s.onchange = async () => {
-    const valor = s.value;
-    if (DEMO) { const todos = demoSeed(); const x = todos.find(y => String(y.id) === String(s.dataset.validar)); if (x) x.validado = valor; demoGuardar(todos); }
-    else { const { error } = await sb.from("viajes").update({ validado: valor }).eq("id", s.dataset.validar); if (error) { alert(error.message); return; } }
-    const td = s.closest("td");
-    if (td) td.className = "celda-validado v-" + valor;
-    cargarCoord();
-  });
-  marcarRecortes(tb);
+tb.querySelectorAll("[data-validar]").forEach(s => s.onchange = async () => {
+      const valor = s.value;
+      if (DEMO) { const todos = demoSeed(); const x = todos.find(y => String(y.id) === String(s.dataset.validar)); if (x) x.validado = valor; demoGuardar(todos); }
+      else { const { error } = await sb.from("viajes").update({ validado: valor }).eq("id", s.dataset.validar); if (error) { alert(error.message); return; } }
+      const td = s.closest("td");
+      if (td) td.className = "celda-validado v-" + valor;
+      cargarCoord();
+    });
+    marcarRecortes(tb);
+  } catch (err) {
+    console.error(err);
+    alert("Error al cargar tabla: " + (err && err.message ? err.message : err));
+  }
 }
 /* Resumen por profesor del periodo visible: compara actividad de un vistazo.
    Usa los filtros de fecha y profesora de la parte superior. */
@@ -1716,6 +1744,7 @@ async function pdfHoja(prof, viajes, rango, tickets, soloDatos) {
   const W = 841.89, H = 595.28, M = 24;
   const e = v => String(v ?? "").replace(/[áéíóúñü]/gi, c => ({ á: "a", é: "e", í: "i", ó: "o", ú: "u", ñ: "n", ü: "u", Á: "A", É: "E", Í: "I", Ó: "O", Ú: "U", Ñ: "N" }[c] || c));
   const total = (viajes || []).reduce((a, v) => a + +v.total, 0);
+  const totalKm = (viajes || []).reduce((a, v) => a + (+v.km || 0), 0);
   const marco = (x, y, w, h, fill) => {
     doc.setDrawColor(60); doc.setLineWidth(0.6);
     if (fill) { doc.setFillColor(fill[0], fill[1], fill[2]); doc.rect(x, y, w, h, "FD"); }
@@ -1730,34 +1759,41 @@ async function pdfHoja(prof, viajes, rango, tickets, soloDatos) {
     while (s > 5.5 && doc.getTextWidth(txt) > w - 4) { s -= 0.5; doc.setFontSize(s); }
     doc.text(txt, align === "center" ? x + w / 2 : align === "right" ? x + w - 2 : x + 2, y, { align: align || "left" });
   };
-  // Logo del grupo arriba a la derecha (incrustado en logo.js; respaldo: logo.png)
+  // Encabezado de hoja (logo, datos del trabajador, Importe, Hoja N de X).
+  // Se repite idéntico en cada página de la tabla; el logo se carga una sola vez.
+  let logoCache = null;
   try {
-    let L = null;
-    if (window.LOGO_DATAURL) L = { jpg: window.LOGO_DATAURL, w: window.LOGO_W || 700, h: window.LOGO_H || 180 };
-    else L = logoADataUrl(await cargarImagenTicket("logo.png?v=20260918"));
-    const lw = 130, lh = lw * L.h / L.w;
-    doc.addImage(L.jpg, "JPEG", W - M - lw, 20, lw, lh);
+    if (window.LOGO_DATAURL) logoCache = { jpg: window.LOGO_DATAURL, w: window.LOGO_W || 700, h: window.LOGO_H || 180 };
+    else logoCache = logoADataUrl(await cargarImagenTicket("logo.png?v=20260918"));
   } catch (err) { if (window.console) console.warn("Logo no disponible:", err); }
-  // Bloque de datos + Codigo/Hoja + Importe
-  const iy = 76, rh = 14, labW = 68, valW = 210;
-  [["Trabajador", e(prof.nombre || "")], ["N.I.F.", prof.nif || ""], ["Categoria", e(prof.categoria || "")],
-   ["Proyecto", e(prof.proyecto || "")], ["Fecha", `${fmtFecha(rango.desde)} - ${fmtFecha(rango.hasta)}`]
-  ].forEach(([lab, val], i) => {
-    const y = iy + i * rh;
-    marco(M, y, labW, rh); marco(M + labW, y, valW, rh);
-    celdaTxt(e(lab), M, y + 10, labW, 8, false, "left");
-    celdaTxt(val, M + labW, y + 10, valW, 8, true, "left");
-  });
-  doc.setFont("helvetica", "bold"); doc.setFontSize(12);
-  doc.text("Importe", W / 2, iy + 2 * rh, { align: "center" });
+  const dibujarPortada = (numHoja, totalHojas) => {
+    if (logoCache) {
+      const lw = 130, lh = lw * logoCache.h / logoCache.w;
+      doc.addImage(logoCache.jpg, "JPEG", W - M - lw, 20, lw, lh);
+    }
+    // Bloque de datos + Codigo/Hoja + Importe
+    // iy y rh están definidos en el ámbito exterior para que ty pueda usarlos.
+    const labW = 68, valW = 210;
+    [["Trabajador", e(prof.nombre || "")], ["N.I.F.", prof.nif || ""], ["Categoria", e(prof.categoria || "")],
+     ["Proyecto", e(prof.proyecto || "")], ["Fecha", `${fmtFecha(rango.desde)} - ${fmtFecha(rango.hasta)}`]
+    ].forEach(([lab, val], i) => {
+      const y = iy + i * rh;
+      marco(M, y, labW, rh); marco(M + labW, y, valW, rh);
+      celdaTxt(e(lab), M, y + 10, labW, 8, false, "left");
+      celdaTxt(val, M + labW, y + 10, valW, 8, true, "left");
+    });
+    doc.setFont("helvetica", "bold"); doc.setFontSize(12);
+    doc.text("Importe", W / 2, iy + 2 * rh, { align: "center" });
+    dibujarHoja(numHoja, totalHojas);
+    // Devuelve la posición Y donde empiezan las filas de la tabla (segun ty).
+    return iy + 5 * rh + 8;
+  };
   const rx = W - M - 150, ry = 90; // debajo del logo para no solaparse
-  marco(rx, ry, 60, rh); marco(rx + 60, ry, 90, rh);
-  celdaTxt("Codigo", rx, ry + 10, 60, 8, false, "left");
-  marco(rx, ry + rh, 150, rh);
-  celdaTxt("Hoja 1", rx, ry + 2 * rh - 4, 150, 8, false, "center");
   // Tabla: Fecha | Desplazamiento | Km Euros TOTAL | Motivo | Estancia | Comida | Total
   const anchos = [64, 150, 36, 44, 56, 199, 46, 46, 46, 46, 60];
   const X = i => M + anchos.slice(0, i).reduce((a, b) => a + b, 0);
+  // iy y rh se definen aquí fuera para que ty (y la cabecera de la tabla) pueda usarlos.
+  const iy = 76, rh = 14;
   const ty = iy + 5 * rh + 8, h1 = 15, h2 = 12, h3 = 12, rhB = 13;
   const dibujarCabecera = y0 => {
     marco(X(2), y0, X(6) - X(2), h1); celdaTxt("Desplazamiento", X(2), y0 + 11, X(6) - X(2), 9, true, "center");
@@ -1781,35 +1817,91 @@ async function pdfHoja(prof, viajes, rango, tickets, soloDatos) {
   const BANDAS = [[223, 239, 251], [228, 223, 241], [241, 221, 230], [253, 236, 213], [224, 239, 220], [255, 245, 208], [224, 239, 239], [240, 228, 240]];
   let bi = -1, lastKey = " ";
   const filasBody = ordenados.map(v => {
-    const key = `${v.motivo_codigo || ""}|${v.motivo_curso || ""}`;
+    const key = codigoCurso(v) || "(sin codigo)";
     if (key !== lastKey) { lastKey = key; bi = (bi + 1) % BANDAS.length; }
     return { v, band: BANDAS[bi], key };
   });
+  // Parte un texto largo en varias líneas sin invadir la columna contigua (máx. 3)
+  const partirLineas = (txt, w, size = 7.5) => {
+    doc.setFont("helvetica", "normal"); doc.setFontSize(size);
+    const palabras = String(txt ?? "").split(" ").filter(Boolean);
+    const lineas = []; let actual = "";
+    palabras.forEach(p => {
+      const prueba = actual ? actual + " " + p : p;
+      if (doc.getTextWidth(prueba) > w - 4 && actual) { lineas.push(actual); actual = p; }
+      else actual = prueba;
+    });
+    if (actual) lineas.push(actual);
+    return lineas.slice(0, 3);
+  };
+  // Etiqueta "Hoja N de X": se dibuja en cada página de la tabla
+  const dibujarHoja = (num, total) => {
+    marco(rx, ry, 60, rh); marco(rx + 60, ry, 90, rh);
+    celdaTxt("Codigo", rx, ry + 10, 60, 8, false, "left");
+    marco(rx, ry + rh, 150, rh);
+    celdaTxt(`Hoja ${num} de ${total}`, rx, ry + 2 * rh - 4, 150, 8, false, "center");
+  };
   const pieReserva = 100, SEP = 5; // hueco blanco entre cursos distintos
-  let y = dibujarCabecera(ty);
+  const MAX_LINEAS_POR_HOJA = 20; // máximo de líneas de viajes por página de tabla
+  // Paso 1: precalcular en qué página de la tabla cae cada fila (para saber el total)
+  const altoCabecera = h1 + h2 + h3;
+  const paginasTabla = []; let paginaActual = [], yAux = ty + altoCabecera, lineasActual = 0;
   filasBody.forEach((f, idx) => {
-    if (idx > 0 && f.key !== filasBody[idx - 1].key) y += SEP; // separar cursos
-    if (y + rhB > H - M - pieReserva) { doc.addPage("a4", "l"); y = dibujarCabecera(ty); }
-    const v = f.v;
+    if (idx > 0 && f.key !== filasBody[idx - 1].key) yAux += SEP;
+    const motivoTxt = e(`${f.v.motivo_codigo ? f.v.motivo_codigo + " - " : ""}${f.v.motivo_curso || ""}`);
+    const motivoLineas = partirLineas(motivoTxt, anchos[5]);
+    const alto = motivoLineas.length > 1 ? rhB * motivoLineas.length : rhB;
+    const renglones = motivoLineas.length; // una fila multilínea ocupa varios renglones visuales
+    if (yAux + alto > H - M - pieReserva || lineasActual + renglones > MAX_LINEAS_POR_HOJA) {
+      paginasTabla.push(paginaActual); paginaActual = []; yAux = ty + altoCabecera; lineasActual = 0;
+    }
+    paginaActual.push({ f, alto, motivoLineas }); lineasActual += renglones;
+  });
+  paginasTabla.push(paginaActual);
+  const totalPaginasTabla = paginasTabla.length;
+  // Paso 2: dibujar cada página de la tabla con su cabecera y su etiqueta Hoja N de X
+  let y = 0;
+  paginasTabla.forEach((filasPagina, p) => {
+    if (p > 0) doc.addPage("a4", "l");
+    y = dibujarPortada(p + 1, totalPaginasTabla);
+    y = dibujarCabecera(ty);
+    filasPagina.forEach(({ f, alto: altoFila, motivoLineas }, fi) => {
+      if (fi > 0) { const idxGlobal = filasBody.indexOf(f); if (idxGlobal > 0 && f.key !== filasBody[idxGlobal - 1].key) y += SEP; }
+      const v = f.v;
       const vals = [
         [fmtFecha(v.fecha), "center"], [e(textoRutaPDF(v)), "left"],
         [String(v.km), "center"], [`${String(v.precio_km).replace(".", ",")} €`, "center"],
-        [fmtES(+v.total), "center"], [e(`${v.motivo_codigo ? v.motivo_codigo + " - " : ""}${v.motivo_curso || ""}`), "center"],
+        [fmtES(+v.total), "center"], [motivoLineas, "center"],
         ["", "center"], ["", "center"], ["", "center"], ["", "center"], [fmtES(+v.total), "center"],
       ];
       vals.forEach(([t, al], i) => {
         doc.setFillColor(f.band[0], f.band[1], f.band[2]);
         doc.setDrawColor(60); doc.setLineWidth(0.6);
-        doc.rect(X(i), y, anchos[i], rhB, "FD");
-        if (t) celdaTxt(t, X(i), y + 9.5, anchos[i], 7.5, false, al);
+        doc.rect(X(i), y, anchos[i], altoFila, "FD");
+        if (i === 5 && Array.isArray(t)) {
+          t.forEach((linea, l) => celdaTxt(linea, X(i), y + 9.5 + l * 9, anchos[i], 7.5, false, al));
+        } else if (t) celdaTxt(t, X(i), y + altoFila / 2 + 2.5, anchos[i], 7.5, false, al);
       });
-      y += rhB;
+      y += altoFila;
     });
-    const totY = y + 18;
+  });
+    const totY = y + 14;
+  // Totales y firmas: si no caben completos en la última página, se crea una hoja nueva
+  const ALTO_TOTALES_FIRMAS = 14 + 24 + 8 + 54 + M; // línea de totales + etiquetas + recuadros + margen
+  if (totY + (ALTO_TOTALES_FIRMAS - 14) > H - M) {
+    doc.addPage("a4", "l");
+    y = dibujarPortada(totalPaginasTabla, totalPaginasTabla);
+    y = dibujarCabecera(ty);
+    // La etiqueta de hoja no cambia: los totales pertenecen a la última hoja de tabla
+  }
+  const totYf = y + 14;
   doc.setFont("helvetica", "bold"); doc.setFontSize(10);
-  doc.text(fmtES(total), X(10) + anchos[10] / 2, totY, { align: "center" });
+  doc.text(fmtES(total), X(10) + anchos[10] / 2, totYf, { align: "center" });
+  // Total de kilómetros al pie de su columna, en la misma línea que el total de euros
+  doc.text(Math.round(totalKm).toLocaleString("es-ES") + " km", X(2) + anchos[2] / 2, totYf, { align: "center" });
   doc.setFontSize(8);
-  const pieY = H - M - 82; // firmas al pie de la hoja
+  // Las firmas nunca solapan los totales: si la tabla baja mucho, el pie se desplaza
+  const pieY = Math.max(H - M - 82, totYf + 24); // firmas al pie de la hoja
   doc.text("FIRMA DEL TRABAJADOR", M, pieY);
   const ax = W - M - 340;
   doc.text("AUTORIZADO POR", ax, pieY);
@@ -1825,8 +1917,13 @@ async function pdfHoja(prof, viajes, rango, tickets, soloDatos) {
   doc.rect(M, pieY + 8, 340, 54);
   doc.rect(ax, pieY + 8, 340, 54);
   const anexos = tickets && tickets.certs ? tickets : { certs: [], tickets: tickets || [] };
-  // 1) Un certificado por código de curso, cada uno una sola vez.
-  for (const v of cursosUnicos(viajes)) {
+  // 1) Un certificado por código de curso, en el mismo orden en que los cursos salen en la tabla.
+  const cursosEnOrdenTabla = [];
+  filasBody.forEach(({ v }) => {
+    const cod = codigoCurso(v).toUpperCase();
+    if (cod && !cursosEnOrdenTabla.some(x => codigoCurso(x).toUpperCase() === cod)) cursosEnOrdenTabla.push(v);
+  });
+  for (const v of cursosEnOrdenTabla) {
     const cod = codigoCurso(v).toUpperCase();
     const c = (anexos.certs || []).find(x => String(x.curso_codigo || "").toUpperCase() === cod);
     if (!c) continue;
