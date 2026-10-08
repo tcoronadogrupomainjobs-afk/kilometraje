@@ -1876,6 +1876,7 @@ async function pdfHoja(prof, viajes, rango, tickets, soloDatos) {
       paginasTabla.push(paginaActual); paginaActual = []; yAux = ty + altoCabecera; lineasActual = 0;
     }
     paginaActual.push({ f, alto, motivoLineas }); lineasActual += renglones;
+    yAux += alto; // acumula la altura real: sin esto la tabla se desborda y los totales acaban solos en otra hoja
   });
   paginasTabla.push(paginaActual);
   const totalPaginasTabla = paginasTabla.length;
@@ -1906,8 +1907,9 @@ async function pdfHoja(prof, viajes, rango, tickets, soloDatos) {
     });
   });
     const totY = y + 14;
-  // Totales y firmas: si no caben completos en la última página, se crea una hoja nueva
-  const ALTO_TOTALES_FIRMAS = 14 + 24 + 8 + 54 + M; // línea de totales + etiquetas + recuadros + margen
+  // Totales y firmas: si no caben completos en la última página, se crea una hoja nueva.
+  // El margen M no se suma aquí: la comparación ya es contra H - M (evita contarlo dos veces).
+  const ALTO_TOTALES_FIRMAS = 14 + 24 + 8 + 54; // línea de totales + etiquetas + recuadros
   if (totY + (ALTO_TOTALES_FIRMAS - 14) > H - M) {
     doc.addPage("a4", "l");
     y = dibujarPortada(totalPaginasTabla, totalPaginasTabla);
