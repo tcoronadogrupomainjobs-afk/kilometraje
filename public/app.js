@@ -1621,7 +1621,7 @@ async function cargarCoord() {
   };
   (data || []).forEach(v => {
     tot += +v.total; totKm += +v.km || 0;
-    tb.innerHTML += `<tr style="background:${colores[claveCurso(v)]}"><td>${v.fecha.split("-").reverse().join("/")}</td><td>${esc(v.profiles.nombre)}</td>
+    tb.innerHTML += `<tr data-viaje-id="${esc(v.id)}" style="background:${colores[claveCurso(v)]}"><td>${v.fecha.split("-").reverse().join("/")}</td><td>${esc(v.profiles.nombre)}</td>
       <td title="${esc(tituloRuta(v))}">${esc(textoRuta(v))}${iconoRuta(v)}</td><td${v.manual ? ' class="km-manual" title="Km manual — autorizado por coordinadora"' : ""}>${v.km}</td><td>${fmtES(+v.total)}</td>
       ${celdaRecorte((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}${celdaObs(v)}${celdaC(v)}${celdaValidado(v)}</tr>`;
   });
@@ -1659,6 +1659,127 @@ function pintarChart(id, cfg) {
   new window.Chart(el, cfg);
 }
 const baseChart = titulo => ({ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, title: { display: true, text: titulo } } });
+/* ---------- calendario por profesor (seccion Resumen) ---------- */
+const MESES_LARGOS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+let calProfSel = null; // profesor con el calendario abierto (se conserva al cambiar filtros)
+/* Festivos nacionales y de Castilla y León (fuente: calendarios.ideal.es).
+   2027 es la previsión publicada por esa web (aún no es definitiva). */
+const FESTIVOS_CYL = {
+  "2025-01-01": "Año Nuevo",
+  "2025-01-06": "Epifanía del Señor",
+  "2025-04-18": "Viernes Santo",
+  "2025-04-23": "Fiesta de la Comunidad Autónoma",
+  "2025-05-01": "Fiesta del Trabajo",
+  "2025-08-15": "Asunción de la Virgen",
+  "2025-10-13": "Día siguiente al Día de la Hispanidad",
+  "2025-11-01": "Día de todos los Santos",
+  "2025-12-06": "Día de la Constitución Española",
+  "2025-12-08": "La Inmaculada Concepción",
+  "2025-12-25": "Natividad del Señor",
+  "2026-01-01": "Año Nuevo",
+  "2026-01-06": "Epifanía del Señor",
+  "2026-04-03": "Viernes Santo",
+  "2026-04-23": "Fiesta de la Comunidad Autónoma",
+  "2026-05-01": "Fiesta del Trabajo",
+  "2026-08-15": "Asunción de la Virgen",
+  "2026-10-12": "Fiesta Nacional de España",
+  "2026-11-02": "Festividad de Todos los Santos (trasladada)",
+  "2026-12-08": "La Inmaculada Concepción",
+  "2026-12-25": "Natividad del Señor",
+  "2027-01-01": "Año Nuevo",
+  "2027-01-06": "Epifanía del Señor",
+  "2027-03-26": "Viernes Santo",
+  "2027-04-23": "Fiesta de la Comunidad Autónoma",
+  "2027-05-01": "Fiesta del Trabajo",
+  "2027-08-15": "Asunción de la Virgen",
+  "2027-10-12": "Fiesta Nacional de España",
+  "2027-11-01": "Día de todos los Santos",
+  "2027-12-06": "Día de la Constitución Española",
+  "2027-12-08": "La Inmaculada Concepción",
+  "2027-12-25": "Natividad del Señor"
+};
+/* Un elemento [año, mes] por cada mes tocado por el filtro de fechas */
+function mesesDelRango(desde, hasta) {
+  const ok = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
+  const d = ok(desde) ? desde : new Date().toISOString().slice(0, 10);
+  const h = ok(hasta) ? hasta : d;
+  let y = +d.slice(0, 4), m = +d.slice(5, 7);
+  const yf = +h.slice(0, 4), mf = +h.slice(5, 7);
+  const lista = [];
+  while ((y < yf || (y === yf && m <= mf)) && lista.length < 120) {
+    lista.push([y, m]);
+    if (++m > 12) { m = 1; y++; }
+  }
+  return lista;
+}
+/* Rejilla de los meses del filtro con los dias de viaje pintados por curso */
+function htmlCalendarioProf(nombre, viajes, desde, hasta, coloresCursos) {
+  const propios = (viajes || []).filter(v => ((v.profiles && v.profiles.nombre) || "?") === nombre);
+  const porDia = {}, cursos = {}, primera = {};
+  propios.forEach(v => {
+    const k = claveCurso(v);
+    if (!primera[k] || String(v.fecha) < primera[k]) primera[k] = String(v.fecha);
+    cursos[k] = { color: coloresCursos[k] || BANDAS_CSS[0], codigo: codigoCurso(v) || "Sin código", nombre: v.motivo_curso || "" };
+    (porDia[v.fecha] = porDia[v.fecha] || []).push({ id: v.id, color: cursos[k].color, codigo: cursos[k].codigo, curso: cursos[k].nombre, km: +v.km || 0 });
+  });
+  const clavesCurso = Object.keys(cursos).sort((a, b) =>
+    String(primera[a]).localeCompare(String(primera[b])) || a.localeCompare(b, "es", { numeric: true }));
+  const hoy = new Date().toISOString().slice(0, 10);
+  const meses = mesesDelRango(desde, hasta).map(([y, m]) => {
+    const clave = `${y}-${String(m).padStart(2, "0")}`;
+    const diasMes = new Date(y, m, 0).getDate();
+    const hueco = (new Date(y, m - 1, 1).getDay() + 6) % 7; // lunes = 0
+    const celdas = [];
+    for (let i = 0; i < hueco; i++) celdas.push('<span class="cal-dia vacio"></span>');
+    for (let d = 1; d <= diasMes; d++) {
+      const iso = `${clave}-${String(d).padStart(2, "0")}`;
+      const lista = porDia[iso] || [];
+      const coloresDia = [...new Set(lista.map(x => x.color))];
+      const ids = lista.map(x => x.id).filter(id => id !== undefined && id !== null);
+      const festivo = FESTIVOS_CYL[iso];
+      let estilo = "", titulo = fmtFecha(iso);
+      if (festivo) titulo += `\n🎉 Festivo: ${festivo}`;
+      if (lista.length) {
+        titulo += "\n" + lista.map(x => `${x.codigo}${x.curso ? " - " + x.curso : ""}${x.km ? ` (${x.km} km)` : ""}`).join("\n");
+        if (ids.length) titulo += "\n👉 Clic para ir al viaje en la tabla";
+        if (coloresDia.length === 1) estilo = `background:${coloresDia[0]}`;
+        else {
+          const paso = 100 / coloresDia.length;
+          estilo = "background:linear-gradient(135deg," + coloresDia.map((c, i) => `${c} ${Math.round(i * paso)}% ${Math.round((i + 1) * paso)}%`).join(",") + ")";
+        }
+      }
+      const clases = ["cal-dia", lista.length ? "con-viaje" : "sin-viaje"];
+      if (festivo) clases.push("festivo");
+      if (iso === hoy) clases.push("hoy");
+      if (iso < desde || iso > hasta) clases.push("fuera");
+      const attrDia = ids.length ? ` data-cal-ids="${ids.join(",")}" role="button" tabindex="0"` : "";
+      celdas.push(`<span class="${clases.join(" ")}" style="${estilo}"${attrDia} title="${esc(titulo)}"><span class="cal-num">${d}</span></span>`);
+    }
+    return `<div class="cal-mes"><h5>${MESES_LARGOS[m - 1]} ${y}</h5>
+      <div class="cal-grid">${["L", "M", "X", "J", "V", "S", "D"].map(x => `<span class="cal-dow">${x}</span>`).join("")}${celdas.join("")}</div></div>`;
+  }).join("");
+  const leyenda = `<div class="cal-leyenda">
+      <span class="cal-clave cal-clave-festivo"><i></i>Festivo (España / Castilla y León)</span>
+      ${clavesCurso.length ? clavesCurso.map(k => { const c = cursos[k]; return `<span class="cal-clave"><i style="background:${c.color}"></i>${esc(c.codigo)}${c.nombre ? ` - ${esc(c.nombre)}` : ""}</span>`; }).join("") : '<span class="muted">Sin viajes en este periodo.</span>'}
+    </div>`;
+  return `<div class="cal-cab"><h4>📅 Calendario de ${esc(nombre)}</h4><span class="muted">${fmtFecha(desde)} – ${fmtFecha(hasta)}</span><button type="button" class="ibtn" id="cal-cerrar" title="Cerrar calendario">✕ Cerrar</button></div>
+    <div class="cal-meses">${meses || '<p class="muted">Periodo no válido.</p>'}</div>${leyenda}`;
+}
+/* Al pulsar un dia con viaje: lleva a su fila en "Todos los desplazamientos" y la resalta */
+let timerFilaCal = null;
+function irAFilaCalendario(idsCsv) {
+  const ids = String(idsCsv || "").split(",").filter(Boolean);
+  if (!ids.length) return;
+  const tb = $("t-coord") && $("t-coord").querySelector("tbody");
+  if (!tb) return;
+  const destinos = [...tb.querySelectorAll("tr[data-viaje-id]")].filter(tr => ids.includes(String(tr.dataset.viajeId)));
+  if (!destinos.length) return;
+  if (timerFilaCal) clearTimeout(timerFilaCal);
+  document.querySelectorAll("#t-coord tr.fila-destacada").forEach(tr => tr.classList.remove("fila-destacada"));
+  destinos.forEach(tr => tr.classList.add("fila-destacada"));
+  destinos[0].scrollIntoView({ behavior: "smooth", block: "center" });
+  timerFilaCal = setTimeout(() => destinos.forEach(tr => tr.classList.remove("fila-destacada")), 3500);
+}
 async function renderResumen(viajes, certMap, turno, allProfs=[]) {
   const box = $("resumen-coord");
   if (!box) return;
@@ -1683,6 +1804,7 @@ async function renderResumen(viajes, certMap, turno, allProfs=[]) {
   const totE = filas.reduce((a, [, r]) => a + r.total, 0);
   const nombres = filas.map(([n]) => n);
   const colores = nombres.map((_, i) => PALETA[i % PALETA.length]);
+  const coloresCursosResumen = mapaColoresCursos(viajes || []); // mismos colores por curso que la tabla de arriba
   box.innerHTML = `<p class="muted">Periodo ${fmtFecha(desde)} – ${fmtFecha(hasta)}${f ? ` · profesora: «${esc(f)}»` : ""} (filtros de arriba)</p>
     <div class="kpis">
       <div class="kpi"><b>${filas.length}</b><span>profesores</span></div>
@@ -1694,11 +1816,12 @@ async function renderResumen(viajes, certMap, turno, allProfs=[]) {
     filas.map(([n, r]) => {
       const e = estadoLimite(r.km);
       const sinViajes = r.viajes === 0;
-      const nombreCelda = `<span class="sin-viajes ${sinViajes ? 'rojo' : ''}">${esc(n)}${sinViajes ? '' : ''}</span>`;
+      const nombreCelda = `<span class="sin-viajes ${sinViajes ? 'rojo' : ''}"><button type="button" class="prof-link${calProfSel === n ? ' activo' : ''}" data-cal-prof="${esc(n)}" title="Ver el calendario de ${esc(n)}">${esc(n)}</button></span>`;
       return `<tr><td>${nombreCelda}</td><td>${r.viajes}</td><td class="km-limite limite-${e.nivel}" title="${esc(e.aviso)}">${Math.round(r.km)}</td>` +
       `<td>${fmtES(r.total)}</td><td>${r.sinCert ? `<b class="alerta">${r.sinCert}</b>` : "0"}</td>` +
       `<td class="barcell"><div class="bar" style="width:${maxKm ? Math.round(r.km / maxKm * 100) : 0}%"></div></td></tr>`; }).join("") +
     `</tbody></table>
+    <div id="cal-prof" class="cal-prof" hidden></div>
     <div class="charts">
       <div class="chartbox"><canvas id="ch-km"></canvas></div>
       <div class="chartbox"><canvas id="ch-euros"></canvas></div>
@@ -1731,6 +1854,30 @@ async function renderResumen(viajes, certMap, turno, allProfs=[]) {
   const kmMes = Object.fromEntries(claves6.map(k => [k, 0]));
   (todos || []).forEach(v => { const k = String(v.fecha).slice(0, 7); if (k in kmMes) kmMes[k] += +v.km || 0; });
   pintarChart("ch-meses", { type: "line", data: { labels: claves6.map(k => MESES_ES[+k.slice(5, 7) - 1] + " " + k.slice(2, 4)), datasets: [{ data: claves6.map(k => Math.round(kmMes[k])), borderColor: "#1a73e8", backgroundColor: "#1a73e833", fill: true, tension: 0.3 }] }, options: baseChart("Km por mes (6 meses)") });
+  // Calendario: se abre al pulsar el nombre del profesor y se queda abierto al cambiar filtros
+  const panelCal = $("cal-prof");
+  const marcarActivo = n => box.querySelectorAll("[data-cal-prof]").forEach(b => b.classList.toggle("activo", b.dataset.calProf === n));
+  const cerrarCal = () => {
+    calProfSel = null; panelCal.hidden = true; panelCal.innerHTML = ""; marcarActivo(null);
+  };
+  const abrirCal = (n, desplazar) => {
+    calProfSel = n; marcarActivo(n); panelCal.hidden = false;
+    panelCal.innerHTML = htmlCalendarioProf(n, viajes || [], desde, hasta, coloresCursosResumen);
+    panelCal.querySelectorAll("[data-cal-ids]").forEach(dia => {
+      const ir = () => irAFilaCalendario(dia.dataset.calIds);
+      dia.onclick = ir;
+      dia.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ir(); } };
+    });
+    const btn = $("cal-cerrar"); if (btn) btn.onclick = cerrarCal;
+    if (desplazar && panelCal.scrollIntoView) panelCal.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+  box.querySelectorAll("[data-cal-prof]").forEach(b => b.onclick = () => {
+    if (calProfSel === b.dataset.calProf) cerrarCal(); else abrirCal(b.dataset.calProf, true);
+  });
+  if (calProfSel) {
+    if (filas.some(([n]) => n === calProfSel)) abrirCal(calProfSel, false);
+    else calProfSel = null;
+  }
 }
 // Coordinador: abrir el certificado de un viaje en pestaña nueva
 async function verCertCoord(c) {

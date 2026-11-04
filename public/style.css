@@ -170,6 +170,37 @@ table.dash{font-size:14px}
 table.dash .barcell{width:34%}
 .bar{height:12px;border-radius:6px;background:linear-gradient(90deg,var(--pri),var(--pri-d))}
 .alerta{color:var(--bad)}
+/* Calendario por profesor (Resumen del coordinador) */
+.prof-link{background:none;border:0;padding:0;font:inherit;color:var(--pri);font-weight:700;cursor:pointer;text-align:left;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px}
+.prof-link:hover,.prof-link.activo{color:var(--pri-d);text-decoration-style:solid}
+.prof-link.activo::after{content:" ▾";font-size:12px}
+.cal-prof{border:1px solid var(--line);border-radius:12px;background:#fbfdff;padding:12px 14px;margin:12px 0}
+.cal-prof[hidden]{display:none}
+.cal-cab{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.cal-cab h4{margin:0;font-size:16px}
+.cal-cab .muted{font-size:13px}
+.cal-cab #cal-cerrar{margin-left:auto}
+.cal-meses{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
+.cal-mes{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px}
+.cal-mes h5{margin:0 0 8px;font-size:15px;text-align:center;text-transform:capitalize}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.cal-dow{font-size:11px;font-weight:700;color:var(--mut);text-align:center;padding-bottom:2px}
+.cal-dia{position:relative;aspect-ratio:1;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;background:#f4f7fc;border:1px solid transparent}
+.cal-dia.vacio{background:transparent;border:0}
+.cal-dia.fuera{opacity:.35}
+.cal-dia.con-viaje{font-weight:700;border-color:#0000001f;box-shadow:inset 0 0 0 1px #ffffff55;cursor:pointer}
+.cal-dia.con-viaje:hover{transform:scale(1.08);box-shadow:0 2px 8px #0f2a4a33;z-index:1}
+.cal-dia.con-viaje:focus-visible{outline:2px solid var(--pri);outline-offset:1px}
+.cal-dia.hoy{outline:2px solid var(--pri);outline-offset:1px}
+.cal-dia.festivo .cal-num{color:var(--bad);font-weight:800}
+.cal-dia.festivo::after{content:"";position:absolute;top:3px;right:3px;width:6px;height:6px;border-radius:50%;background:var(--bad);box-shadow:0 0 0 1px #fff}
+.cal-leyenda{display:flex;gap:8px 16px;flex-wrap:wrap;margin-top:12px;padding-top:10px;border-top:1px dashed var(--line);font-size:13px}
+.cal-clave{display:inline-flex;align-items:center;gap:6px;font-weight:600}
+.cal-clave i{width:15px;height:15px;border-radius:4px;border:1px solid #00000026;display:inline-block}
+.cal-clave-festivo i{background:var(--bad);border-radius:50%}
+/* Fila de la tabla a la que salta el calendario */
+#t-coord tbody tr.fila-destacada{outline:3px solid var(--pri);outline-offset:-3px;animation:destello-fila .7s ease-in-out 3}
+@keyframes destello-fila{50%{outline-color:#f59e0b}}
 /* Gráficas del resumen: 2x2 en pantalla, 1 columna en móvil */
 .charts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0}
 .chartbox{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;height:270px}
