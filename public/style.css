@@ -22,6 +22,20 @@ h3.sec-tick{border-color:var(--ok);background:var(--ok-bg)}
 h3.sec-editando{border-color:var(--warn);background:var(--warn-bg)}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0}
 .row .derecha{margin-left:auto;font-weight:600;font-size:14px}
+/* Filtro de profesor con selección múltiple */
+.multi-campo{display:flex;align-items:center;gap:6px;font-weight:600;font-size:14px}
+details.multi{position:relative;font-weight:400}
+details.multi>summary{list-style:none;cursor:pointer;border:1px solid #b9c6da;background:#fff;border-radius:8px;padding:8px 30px 8px 10px;font-size:14px;min-width:170px;max-width:230px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative}
+details.multi>summary::-webkit-details-marker{display:none}
+details.multi>summary::after{content:"▾";position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--mut)}
+details.multi[open]>summary{border-color:var(--pri);box-shadow:0 0 0 2px var(--pri-l)}
+.multi-panel{position:absolute;z-index:30;margin-top:4px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px #0f2a4a26;padding:8px;min-width:240px;max-height:320px;overflow:auto}
+.multi-todos{display:block;width:100%;text-align:left;font-weight:700;font-size:13px;padding:6px 9px;margin-bottom:4px;border:1px solid var(--line);border-radius:7px;background:#f4f8ff;color:var(--pri-d);cursor:pointer}
+.multi-todos:hover,.multi-todos.on{background:var(--pri-l);border-color:var(--pri)}
+.multi-lista{display:flex;flex-direction:column;gap:1px}
+.multi-op{display:flex;flex-direction:row;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;font-weight:500;font-size:14px}
+.multi-op:hover{background:var(--pri-l)}
+.multi-op input{width:16px;height:16px;margin:0;padding:0;accent-color:var(--pri)}
 #f-excluir-prueba{width:17px;height:17px;accent-color:var(--pri);padding:0}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:10px 0}
 .grid .span2{grid-column:1/-1}

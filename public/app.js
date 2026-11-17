@@ -338,7 +338,9 @@ function entrarDemo() {
   cargarDatos();
   $("precio").value = String(precioKm).replace(".", ",");
   if ($("pdf-user")) $("pdf-user").innerHTML = `<option value="demo">${perfil.nombre}</option>`;
-  $("filtro-prof").onchange = cargarCoord; $("f-excluir-prueba").onchange = cargarCoord;
+  mapaProfs = { [perfil.nombre]: perfil };
+  iniciarFiltroProy(perfil.proyecto ? [String(perfil.proyecto).trim()] : []);
+  iniciarFiltroProf([perfil.nombre]); $("f-excluir-prueba").onchange = cargarCoord;
   $("btn-exp-coord").onclick = exportarCoordExcel; $("btn-imp-coord").onclick = () => $("f-imp-coord").click();
   $("f-imp-coord").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importarCoordExcel(f); };
   $("btn-precio").onclick = () => { precioKm = parseFloat($("precio").value.replace(",", ".")) || 0.26; localStorage.setItem("km_precio", String(precioKm)); alert("Precio demo: " + precioKm.toFixed(2) + " €/km"); };
@@ -1380,7 +1382,8 @@ async function importarCoordExcel(file) {
     filas = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
   } catch (e) { alert("No se pudo leer el archivo: " + e.message); return; }
   if (!filas.length) { alert("El Excel no tiene filas."); return; }
-  const filtroNombre = $("filtro-prof").value;
+  const filtroNombres = profesoresFiltrados();
+  const filtroNombre = filtroNombres.length === 1 ? filtroNombres[0] : "";
   let profFijo = (filtroNombre && mapaProfs[filtroNombre]) || null;
   if (DEMO && !profFijo) profFijo = { id: perfil.id, nombre: perfil.nombre };
   if (filtroNombre && !profFijo && !DEMO) {
@@ -1518,10 +1521,86 @@ $("btn-anuncio-cancel").onclick = () => {
 let canal = null;
 let mapaProfs = {}; // nombre -> perfil (para PDF/archivar segun el filtro)
 let ultimosCoord = [], ultimosCertMap = {}; // ultima tabla del coordinador (para Excel)
+/* Filtro de profesor con selección múltiple: sin ninguna casilla marcada = todos */
+function profesoresFiltrados() {
+  return [...document.querySelectorAll("#prof-opciones input[type=checkbox]:checked")].map(c => c.value);
+}
+function actualizarFiltroProf() {
+  const sel = profesoresFiltrados();
+  const txt = $("prof-filtro-txt");
+  if (txt) {
+    txt.textContent = !sel.length ? "Todos los profesores" : sel.length === 1 ? sel[0] : `${sel.length} profesores`;
+    txt.title = sel.length ? sel.join(", ") : "Todos los profesores";
+  }
+  const todos = $("prof-todos");
+  if (todos) todos.classList.toggle("on", !sel.length);
+}
+function iniciarFiltroProf(nombres) {
+  const box = $("prof-opciones");
+  if (!box) return;
+  const marcados = new Set(profesoresFiltrados());
+  box.innerHTML = (nombres || []).map(n =>
+    `<label class="multi-op"><input type="checkbox" value="${esc(n)}"${marcados.has(n) ? " checked" : ""}><span>${esc(n)}</span></label>`).join("");
+  box.querySelectorAll("input").forEach(c => c.onchange = () => { actualizarFiltroProf(); cargarCoord(); });
+  const todos = $("prof-todos");
+  if (todos) todos.onclick = () => {
+    box.querySelectorAll("input").forEach(c => c.checked = false);
+    actualizarFiltroProf(); cargarCoord();
+  };
+  const det = $("prof-filtro");
+  if (det && !det.dataset.fuera) {
+    det.dataset.fuera = "1";
+    document.addEventListener("click", e => { if (det.open && !det.contains(e.target)) det.open = false; });
+  }
+  actualizarFiltroProf();
+}
+/* Filtro de proyecto: limita la lista de profesores y los datos a esos proyectos */
+function proyectosFiltrados() {
+  return [...document.querySelectorAll("#proy-opciones input[type=checkbox]:checked")].map(c => c.value);
+}
+function actualizarFiltroProy() {
+  const sel = proyectosFiltrados();
+  const txt = $("proy-filtro-txt");
+  if (txt) {
+    txt.textContent = !sel.length ? "Todos los proyectos" : sel.length === 1 ? sel[0] : `${sel.length} proyectos`;
+    txt.title = sel.length ? sel.join(", ") : "Todos los proyectos";
+  }
+  const todos = $("proy-todos");
+  if (todos) todos.classList.toggle("on", !sel.length);
+}
+function aplicarFiltroProyectos() {
+  const proys = proyectosFiltrados();
+  const nombres = Object.values(mapaProfs)
+    .filter(p => !proys.length || proys.includes(String(p.proyecto || "").trim()))
+    .map(p => p.nombre);
+  iniciarFiltroProf(nombres);
+  cargarCoord();
+}
+function iniciarFiltroProy(proyectos) {
+  const box = $("proy-opciones");
+  if (!box) return;
+  const marcados = new Set(proyectosFiltrados());
+  box.innerHTML = (proyectos || []).map(n =>
+    `<label class="multi-op"><input type="checkbox" value="${esc(n)}"${marcados.has(n) ? " checked" : ""}><span>${esc(n)}</span></label>`).join("");
+  box.querySelectorAll("input").forEach(c => c.onchange = () => { actualizarFiltroProy(); aplicarFiltroProyectos(); });
+  const todos = $("proy-todos");
+  if (todos) todos.onclick = () => {
+    box.querySelectorAll("input").forEach(c => c.checked = false);
+    actualizarFiltroProy(); aplicarFiltroProyectos();
+  };
+  const det = $("proy-filtro");
+  if (det && !det.dataset.fuera) {
+    det.dataset.fuera = "1";
+    document.addEventListener("click", e => { if (det.open && !det.contains(e.target)) det.open = false; });
+  }
+  actualizarFiltroProy();
+}
 /* Profesor elegido en el filtro de arriba (lo usan PDF y Archivar) */
 async function profFiltroCoord() {
-  const nombre = $("filtro-prof").value;
-  if (!nombre) { alert("Elige un profesor en el filtro de arriba."); return null; }
+  const nombres = profesoresFiltrados();
+  if (!nombres.length) { alert("Elige un profesor en el filtro de arriba."); return null; }
+  if (nombres.length > 1) { alert("PDF y Archivar necesitan un solo profesor. Deja marcado solo uno en el filtro."); return null; }
+  const nombre = nombres[0];
   if (mapaProfs[nombre]) return mapaProfs[nombre];
   const { data } = await sb.from("profiles").select("*").eq("nombre", nombre).single();
   return data;
@@ -1531,9 +1610,11 @@ async function initCoord() {
   aplicarFiltrosGuardados();
   const { data: profs } = await sb.from("profiles").select("*").eq("rol", "profesor").order("nombre");
   mapaProfs = Object.fromEntries((profs || []).map(p => [p.nombre, p]));
-  $("filtro-prof").innerHTML = `<option value="">Todos</option>` + (profs || []).map(p => `<option value="${esc(p.nombre)}">${esc(p.nombre)}</option>`).join("");
   $("precio").value = String(precioKm).replace(".", ",");
-  $("filtro-prof").onchange = cargarCoord;
+  const proyectos = [...new Set((profs || []).map(p => String(p.proyecto || "").trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, "es"));
+  iniciarFiltroProy(proyectos);
+  iniciarFiltroProf((profs || []).map(p => p.nombre));
   $("btn-exp-coord").onclick = exportarCoordExcel;
   $("btn-imp-coord").onclick = () => $("f-imp-coord").click();
   $("f-imp-coord").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importarCoordExcel(f); };
@@ -1579,15 +1660,21 @@ async function initCoord() {
 async function cargarCoord() {
   try {
     const turno = ++turnoCoord;
-  const { desde, hasta } = rangoCoord(), f = $("filtro-prof").value.trim().toLowerCase();
+  const { desde, hasta } = rangoCoord(), nombresFiltro = profesoresFiltrados(), proysFiltro = proyectosFiltrados();
+  const pasaFiltro = v => {
+    const pr = v.profiles || {};
+    if (nombresFiltro.length && !nombresFiltro.includes(pr.nombre || "")) return false;
+    if (proysFiltro.length && !proysFiltro.includes(String(pr.proyecto || "").trim())) return false;
+    return true;
+  };
   let data;
   if (DEMO) {
-    data = demoFiltrarRango(desde, hasta).map(v => ({ ...v, user_id: perfil.id, profiles: { nombre: perfil.nombre } }))
-      .filter(v => !f || v.profiles.nombre.toLowerCase().includes(f));
+    data = demoFiltrarRango(desde, hasta).map(v => ({ ...v, user_id: perfil.id, profiles: { nombre: perfil.nombre, proyecto: perfil.proyecto } }))
+      .filter(pasaFiltro);
   } else {
-    let q = sb.from("viajes").select("*, profiles!inner(nombre)").gte("fecha", desde).lte("fecha", hasta).order("fecha");
-    if (f) q = q.ilike("profiles.nombre", `%${f}%`);
-    data = (await q).data;
+    const q = sb.from("viajes").select("*, profiles!inner(nombre,proyecto)").gte("fecha", desde).lte("fecha", hasta).order("fecha");
+    data = (await q).data || [];
+    if (nombresFiltro.length || proysFiltro.length) data = data.filter(pasaFiltro);
   }
   if ($("f-excluir-prueba").checked) data = (data || []).filter(v => !/prueba/i.test((v.profiles && v.profiles.nombre) || ""));
   data = viajesVisibles(data);
@@ -1625,11 +1712,17 @@ async function cargarCoord() {
       <td title="${esc(tituloRuta(v))}">${esc(textoRuta(v))}${iconoRuta(v)}</td><td${v.manual ? ' class="km-manual" title="Km manual — autorizado por coordinadora"' : ""}>${v.km}</td><td>${fmtES(+v.total)}</td>
       ${celdaRecorte((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}${celdaObs(v)}${celdaC(v)}${celdaValidado(v)}</tr>`;
   });
-  const estCoord = estadoLimite(totKm), profFiltrado = $("filtro-prof").value;
+  const estCoord = estadoLimite(totKm), profFiltrado = nombresFiltro.length;
   $("total-coord").textContent = textoTotal(totKm, tot);
   $("total-coord").className = "total" + (profFiltrado ? " limite-" + estCoord.nivel : "");
-  const allProfs = DEMO ? [perfil.nombre]
-    : ((await sb.from('profiles').select('nombre').eq('rol', 'profesor').order('nombre')).data || []).map(p => p.nombre);
+  let allProfs;
+  if (DEMO) allProfs = [perfil.nombre];
+  else {
+    const listaP = (await sb.from('profiles').select('nombre,proyecto').eq('rol', 'profesor').order('nombre')).data || [];
+    allProfs = listaP
+      .filter(p => !proysFiltro.length || proysFiltro.includes(String(p.proyecto || "").trim()))
+      .map(p => p.nombre);
+  }
   renderResumen(data || [], certMap, turno, allProfs);
   tb.querySelectorAll("[data-vercert]").forEach(b => b.onclick = () => verCertCoord(certMap[b.dataset.vercert]));
 tb.querySelectorAll("[data-validar]").forEach(s => s.onchange = async () => {
@@ -1783,7 +1876,7 @@ function irAFilaCalendario(idsCsv) {
 async function renderResumen(viajes, certMap, turno, allProfs=[]) {
   const box = $("resumen-coord");
   if (!box) return;
-  const { desde, hasta } = rangoCoord(), f = $("filtro-prof").value.trim();
+  const { desde, hasta } = rangoCoord(), f = profesoresFiltrados(), proys = proyectosFiltrados();
   const por = {};
   (viajes || []).forEach(v => {
     const n = (v.profiles && v.profiles.nombre) || "?";
@@ -1791,8 +1884,9 @@ async function renderResumen(viajes, certMap, turno, allProfs=[]) {
     por[n].viajes++; por[n].km += +v.km || 0; por[n].total += +v.total || 0;
     if (!certMap[`${v.user_id}|${codigoCurso(v).toUpperCase()}`]) por[n].cursosSinCert.add(codigoCurso(v));
   });
-  // Incluir todos los profesores (incluso sin viajes)
-  allProfs.forEach(n => {
+  // Incluir los profesores del filtro (o todos si no hay filtro), aunque no tengan viajes
+  const profsResumen = f.length ? allProfs.filter(n => f.includes(n)) : allProfs;
+  profsResumen.forEach(n => {
     if (!por[n]) por[n] = { viajes: 0, km: 0, total: 0, sinCert: 0, cursosSinCert: new Set() };
   });
   Object.values(por).forEach(r => { r.sinCert = r.cursosSinCert.size; delete r.cursosSinCert; });
@@ -1805,7 +1899,7 @@ async function renderResumen(viajes, certMap, turno, allProfs=[]) {
   const nombres = filas.map(([n]) => n);
   const colores = nombres.map((_, i) => PALETA[i % PALETA.length]);
   const coloresCursosResumen = mapaColoresCursos(viajes || []); // mismos colores por curso que la tabla de arriba
-  box.innerHTML = `<p class="muted">Periodo ${fmtFecha(desde)} – ${fmtFecha(hasta)}${f ? ` · profesora: «${esc(f)}»` : ""} (filtros de arriba)</p>
+  box.innerHTML = `<p class="muted">Periodo ${fmtFecha(desde)} – ${fmtFecha(hasta)}${f.length ? ` · ${f.length === 1 ? "profesor" : "profesores"}: «${esc(f.join(", "))}»` : ""}${proys.length ? ` · ${proys.length === 1 ? "proyecto" : "proyectos"}: «${esc(proys.join(", "))}»` : ""} (filtros de arriba)</p>
     <div class="kpis">
       <div class="kpi"><b>${filas.length}</b><span>profesores</span></div>
       <div class="kpi"><b>${totV}</b><span>viajes</span></div>
@@ -1844,11 +1938,14 @@ async function renderResumen(viajes, certMap, turno, allProfs=[]) {
   const claves6 = [];
   for (let i = 5; i >= 0; i--) { const d = new Date(h.getFullYear(), h.getMonth() - i, 1); claves6.push(d.toISOString().slice(0, 7)); }
   let todos;
-  if (DEMO) todos = demoSeed().filter(v => v.fecha >= d6 && (!f || (perfil.nombre || "").toLowerCase().includes(f.toLowerCase())));
+  if (DEMO) todos = demoSeed().filter(v => v.fecha >= d6 && (!f.length || f.includes(perfil.nombre)) && (!proys.length || proys.includes(String(perfil.proyecto || "").trim())));
   else {
-    let q = sb.from("viajes").select("fecha,km,profiles!inner(nombre)").gte("fecha", d6);
-    if (f) q = q.ilike("profiles.nombre", `%${f}%`);
+    const q = sb.from("viajes").select("fecha,km,profiles!inner(nombre,proyecto)").gte("fecha", d6);
     todos = (await q).data || [];
+    if (f.length || proys.length) todos = todos.filter(v => {
+      const pr = v.profiles || {};
+      return (!f.length || f.includes(pr.nombre || "")) && (!proys.length || proys.includes(String(pr.proyecto || "").trim()));
+    });
   }
   if (turno !== turnoCoord) return;
   const kmMes = Object.fromEntries(claves6.map(k => [k, 0]));
