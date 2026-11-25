@@ -34,10 +34,40 @@ function demoSeed() {
 const demoFiltrarRango = (desde, hasta) => demoSeed().filter(v => v.fecha >= desde && v.fecha <= hasta).sort((a, b) => a.fecha.localeCompare(b.fecha));
 let perfil = null, precioKm = 0.26, ultimoCalculo = null, editandoId = null;
 const $ = id => document.getElementById(id);
-const LIMITE_KM_PERIODO = 950;
-const AVISO_KM_PERIODO = 800, ALERTA_KM_PERIODO = 900;
+// Límites de km por periodo. Cambian de un mes a otro, así que la coordinadora
+// los edita en su vista y se guardan en la tabla settings (o en localStorage en
+// la demo): km_limite_rojo, km_limite_naranja y km_limite_amarillo.
+const LIMITES_KM_DEF = { rojo: 950, naranja: 900, amarillo: 800 };
+let LIMITE_KM_PERIODO = LIMITES_KM_DEF.rojo,
+    ALERTA_KM_PERIODO = LIMITES_KM_DEF.naranja,
+    AVISO_KM_PERIODO = LIMITES_KM_DEF.amarillo;
+const CLAVES_LIMITES = { rojo: "km_limite_rojo", naranja: "km_limite_naranja", amarillo: "km_limite_amarillo" };
+// Admite "900" o "900,5"; devuelve null si no es un número positivo.
+const numKm = v => { const n = parseFloat(String(v).replace(",", ".")); return isFinite(n) && n > 0 ? n : null; };
+function aplicarLimitesKm(l) {
+  LIMITE_KM_PERIODO = numKm(l && l.rojo) ?? LIMITES_KM_DEF.rojo;
+  ALERTA_KM_PERIODO = numKm(l && l.naranja) ?? LIMITES_KM_DEF.naranja;
+  AVISO_KM_PERIODO = numKm(l && l.amarillo) ?? LIMITES_KM_DEF.amarillo;
+  return { rojo: LIMITE_KM_PERIODO, naranja: ALERTA_KM_PERIODO, amarillo: AVISO_KM_PERIODO };
+}
+// Límites guardados: settings en Supabase, localStorage en la demo.
+async function cargarLimitesKm() {
+  if (DEMO) {
+    try { const l = JSON.parse(localStorage.getItem("km_limites") || "null"); if (l) aplicarLimitesKm(l); } catch {}
+    return;
+  }
+  const { data, error } = await sb.from("settings").select("clave,valor").in("clave", Object.values(CLAVES_LIMITES));
+  if (error) return; // sin filas todavía: se quedan los valores por defecto
+  const l = { ...LIMITES_KM_DEF };
+  (data || []).forEach(r => {
+    const k = Object.keys(CLAVES_LIMITES).find(x => CLAVES_LIMITES[x] === r.clave);
+    if (k) l[k] = r.valor;
+  });
+  aplicarLimitesKm(l);
+}
 const viajesVisibles = viajes => (viajes || []).filter(v => !v.oculto);
-// Semáforo del límite: verde <800, amarillo 800-899, naranja 900-950, rojo >950.
+// Semáforo del límite: verde por debajo del aviso, amarillo desde el aviso,
+// naranja desde la alerta y rojo al superar el límite.
 function estadoLimite(km) {
   const n = Math.round(km || 0), faltan = LIMITE_KM_PERIODO - n;
   if (n > LIMITE_KM_PERIODO) return { nivel: "rojo", faltan: 0, aviso: `⚠ Límite de ${LIMITE_KM_PERIODO} km superado (${n - LIMITE_KM_PERIODO} km de más)` };
@@ -324,6 +354,7 @@ function entrarDemo() {
   const guardado = (() => { try { return JSON.parse(localStorage.getItem("km_perfil_demo") || "null"); } catch { return null; } })();
   perfil = { id: "demo", nombre: "ADELA RUIZ LAVILLA", nif: "72896446Q", domicilio: "", categoria: "PROFESOR TITULAR", proyecto: "CYL DIGITAL", rol: "profesor", ...(guardado || {}) };
   precioKm = parseFloat((localStorage.getItem("km_precio") || "0.26").replace(",", ".")) || 0.26;
+  try { const l = JSON.parse(localStorage.getItem("km_limites") || "null"); if (l) aplicarLimitesKm(l); } catch {}
   demoSeed();
   $("v-login").hidden = true;
   $("demo-banner").hidden = false;
@@ -344,6 +375,7 @@ function entrarDemo() {
   $("btn-exp-coord").onclick = exportarCoordExcel; $("btn-imp-coord").onclick = () => $("f-imp-coord").click();
   $("f-imp-coord").onchange = e => { const f = e.target.files[0]; e.target.value = ""; if (f) importarCoordExcel(f); };
   $("btn-precio").onclick = () => { precioKm = parseFloat($("precio").value.replace(",", ".")) || 0.26; localStorage.setItem("km_precio", String(precioKm)); alert("Precio demo: " + precioKm.toFixed(2) + " €/km"); };
+  iniciarLimitesKm();
   $("btn-pdf-coord").onclick = async () => {
     try {
       const { desde, hasta } = rangoCoord();
@@ -371,6 +403,7 @@ async function arrancar() {
   perfil = data;
   const s = await sb.from("settings").select("*").eq("clave", "precio_km").single();
   if (s.data) precioKm = parseFloat(s.data.valor);
+  await cargarLimitesKm();
   $("v-login").hidden = true;
   $("sesion").innerHTML = `${perfil.nombre || user.email} (${perfil.rol}) <button id="out">Salir</button>`;
   $("out").onclick = async () => { await sb.auth.signOut(); location.reload(); };
@@ -1521,6 +1554,41 @@ $("btn-anuncio-cancel").onclick = () => {
 let canal = null;
 let mapaProfs = {}; // nombre -> perfil (para PDF/archivar segun el filtro)
 let ultimosCoord = [], ultimosCertMap = {}; // ultima tabla del coordinador (para Excel)
+/* Límites de km editables: rellena los tres campos y guarda al pulsar el botón */
+function iniciarLimitesKm() {
+  if (!$("lim-rojo")) return;
+  $("lim-rojo").value = LIMITE_KM_PERIODO;
+  $("lim-naranja").value = ALERTA_KM_PERIODO;
+  $("lim-amarillo").value = AVISO_KM_PERIODO;
+  $("btn-limites").onclick = guardarLimitesKm;
+}
+async function guardarLimitesKm() {
+  const l = {
+    rojo: numKm($("lim-rojo").value),
+    naranja: numKm($("lim-naranja").value),
+    amarillo: numKm($("lim-amarillo").value),
+  };
+  if (!l.rojo || !l.naranja || !l.amarillo) {
+    alert("Escribe un número de km mayor que 0 en los tres campos.");
+    return;
+  }
+  if (!(l.amarillo < l.naranja && l.naranja < l.rojo)) {
+    alert("Revisa el orden: el aviso amarillo debe ser menor que la alerta naranja, y esta menor que el límite rojo.");
+    return;
+  }
+  if (DEMO) {
+    try { localStorage.setItem("km_limites", JSON.stringify(l)); } catch {}
+  } else {
+    const filas = Object.keys(l).map(k => ({ clave: CLAVES_LIMITES[k], valor: String(l[k]) }));
+    const { error } = await sb.from("settings").upsert(filas);
+    if (error) { alert("No se pudieron guardar los límites: " + error.message); return; }
+  }
+  aplicarLimitesKm(l);
+  iniciarLimitesKm(); // deja los campos con el valor normalizado
+  cargarCoord();
+  if (!$("v-prof").hidden) cargarProf();
+  alert(`Límites guardados: aviso ${l.amarillo} km, alerta ${l.naranja} km, superado ${l.rojo} km.`);
+}
 /* Filtro de profesor con selección múltiple: sin ninguna casilla marcada = todos */
 function profesoresFiltrados() {
   return [...document.querySelectorAll("#prof-opciones input[type=checkbox]:checked")].map(c => c.value);
@@ -1611,6 +1679,7 @@ async function initCoord() {
   const { data: profs } = await sb.from("profiles").select("*").eq("rol", "profesor").order("nombre");
   mapaProfs = Object.fromEntries((profs || []).map(p => [p.nombre, p]));
   $("precio").value = String(precioKm).replace(".", ",");
+  iniciarLimitesKm();
   const proyectos = [...new Set((profs || []).map(p => String(p.proyecto || "").trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b, "es"));
   iniciarFiltroProy(proyectos);
@@ -1712,8 +1781,9 @@ async function cargarCoord() {
       <td title="${esc(tituloRuta(v))}">${esc(textoRuta(v))}${iconoRuta(v)}</td><td${v.manual ? ' class="km-manual" title="Km manual — autorizado por coordinadora"' : ""}>${v.km}</td><td>${fmtES(+v.total)}</td>
       ${celdaRecorte((v.motivo_codigo ? v.motivo_codigo + " - " : "") + v.motivo_curso)}${celdaObs(v)}${celdaC(v)}${celdaValidado(v)}</tr>`;
   });
-  const estCoord = estadoLimite(totKm), profFiltrado = nombresFiltro.length;
-  $("total-coord").textContent = textoTotal(totKm, tot);
+  const estCoord = estadoLimite(totKm), profFiltrado = nombresFiltro.length === 1;
+  $("total-coord").textContent = profFiltrado ? textoTotal(totKm, tot)
+    : `Total: ${Math.round(totKm).toLocaleString("es-ES")} km (${fmtES(tot)})`;
   $("total-coord").className = "total" + (profFiltrado ? " limite-" + estCoord.nivel : "");
   let allProfs;
   if (DEMO) allProfs = [perfil.nombre];
@@ -1906,7 +1976,7 @@ async function renderResumen(viajes, certMap, turno, allProfs=[]) {
       <div class="kpi"><b>${Math.round(totK)} km</b><span>desplazamiento</span></div>
       <div class="kpi"><b>${fmtES(totE)}</b><span>total</span></div>
     </div>
-    <table class="dash"><thead><tr><th>Profesor</th><th>Viajes</th><th title="Color según el límite de 950 km: verde, amarillo desde 800, naranja desde 900, rojo al superar">Km</th><th>Total</th><th>Sin 📜</th><th></th></tr></thead><tbody>` +
+    <table class="dash"><thead><tr><th>Profesor</th><th>Viajes</th><th title="Color según el límite: verde por debajo del aviso, amarillo desde el aviso, naranja desde la alerta y rojo al superar el límite">Km</th><th>Total</th><th>Sin 📜</th><th></th></tr></thead><tbody>` +
     filas.map(([n, r]) => {
       const e = estadoLimite(r.km);
       const sinViajes = r.viajes === 0;

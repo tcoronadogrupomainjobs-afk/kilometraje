@@ -75,6 +75,13 @@ create table if not exists public.settings (
 insert into public.settings (clave, valor)
 values ('precio_km', '0.26')
 on conflict (clave) do nothing;
+-- Límites de aviso de km por periodo (los edita la coordinadora en su vista).
+-- Solo se crean si no existen: no pisan los valores que ya haya guardados.
+insert into public.settings (clave, valor) values
+  ('km_limite_rojo', '950'),
+  ('km_limite_naranja', '900'),
+  ('km_limite_amarillo', '800')
+on conflict (clave) do nothing;
 
 -- 4. Trigger: al crear usuario en auth, crear perfil profesor por defecto
 create or replace function public.handle_new_user()

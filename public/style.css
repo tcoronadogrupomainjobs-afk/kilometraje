@@ -140,6 +140,11 @@ td.km-limite.limite-verde{color:var(--ok)}
 td.km-limite.limite-amarillo{color:#8a6100;background:#fff8d6}
 td.km-limite.limite-naranja{color:#9a4b00;background:#ffe8cc}
 td.km-limite.limite-rojo{color:var(--bad);background:var(--bad-bg)}
+/* Límites de km configurables por la coordinadora */
+.limites-km{padding:6px 10px;border:1px dashed var(--line);border-radius:10px;background:#f7f9fc;gap:8px}
+.limites-tit{font-weight:700;font-size:13px;color:var(--pri-d);text-transform:uppercase;letter-spacing:.3px}
+.limites-km label{font-size:13px;gap:5px;white-space:nowrap}
+.limites-km input{width:68px;text-align:right;padding:6px 8px}
 .muted{color:var(--mut);font-size:13px}
 .error{color:var(--bad);font-weight:700}
 .nota{color:#fff;background:var(--bad);font-size:13px;font-weight:700;padding:2px 10px;border-radius:999px;width:fit-content;white-space:nowrap}
